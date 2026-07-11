@@ -1,0 +1,2028 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LabelPath</title>
+<meta name="description" content="LabelPath: a label where every element can defend itself. Inspection layer, compliance map, 3D container studio with on-pack data carrier, barcode grading, and PDP sizing across cosmetic, pharma, device, and FMCG." />
+<style>
+  html, body { margin: 0; padding: 0; background: #EBEEEC; }
+  #root { min-height: 100vh; }
+  #lp-boot { font-family: 'IBM Plex Mono', ui-monospace, monospace; color: #4A5568; padding: 40px; font-size: 13px; }
+  #lp-boot b { color: #E5399B; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client?external=react",
+    "three": "https://esm.sh/three@0.160.1",
+    "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react"
+  }
+}
+</script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+</head>
+<body>
+<div id="root"><div id="lp-boot">Loading <b>LabelPath</b> ...</div></div>
+<script type="text/babel" data-type="module" data-presets="react">
+import { createRoot } from "react-dom/client";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import * as THREE from "three";
+import {
+  Sparkles, Sun, Leaf, Heart, Command, ClipboardCheck, ScanSearch, Ruler,
+  Printer, RotateCcw, Play, Pause, X, ChevronRight, Box, FileText, AlertTriangle,
+  Pill, Stethoscope, ShoppingBag, Droplet, Palette as PaletteIcon
+} from "lucide-react";
+
+/* =====================================================================
+ * LabelPath Inspector  (Enhanced Edition)
+ * Improved 3D containers with realistic materials, geometry, and
+ * additional container types based on pharmaceutical packaging reference.
+ * ===================================================================== */
+
+const SUBTYPES = [
+  { id: "cream", label: "Cream", fn: "Rich moisturising cream", containers: ["jar", "tube", "airless", "sachet"] },
+  { id: "lotion", label: "Lotion", fn: "Daily body lotion", containers: ["airless", "tube", "jar"] },
+  { id: "serum", label: "Serum", fn: "Concentrated face serum", containers: ["dropper", "airless"] },
+  { id: "lipbalm", label: "Lip balm", fn: "Nourishing lip balm", containers: ["tube", "jar"] },
+  { id: "mist", label: "Face mist", fn: "Hydrating facial mist", containers: ["mist"] },
+];
+const CONTAINERS = { jar: "Jar", tube: "Tube", airless: "Airless pump", dropper: "Dropper", mist: "Mist bottle", sachet: "Sachet" };
+const MARKETS = [{ id: "US", label: "United States" }, { id: "EU", label: "European Union" }, { id: "IN", label: "India" }];
+const ACCENTS = [
+  { id: "teal", hex: "#2F6E6A", name: "Teal" }, { id: "sage", hex: "#6E7F5B", name: "Sage" },
+  { id: "rose", hex: "#B76E79", name: "Rose" }, { id: "amber", hex: "#B9863B", name: "Amber" },
+  { id: "navy", hex: "#2C3E50", name: "Navy" }, { id: "plum", hex: "#6D4A6E", name: "Plum" },
+];
+const ATTRS = [
+  { id: "otc", label: "Sunscreen / SPF", Icon: Sun }, { id: "fragrance", label: "Fragrance", Icon: Sparkles },
+  { id: "organic", label: "Organic", Icon: Leaf }, { id: "sensitive", label: "Sensitive skin", Icon: Heart },
+];
+const FIXED_ORDER = ["brand", "name", "function", "claims", "net", "ingredients", "allergens", "warnings", "drugfacts", "pao", "batch", "best", "responsible", "extra"];
+
+function wrap(text, max) {
+  const words = (text || "").split(" ");
+  const lines = []; let cur = "";
+  words.forEach((w) => { if ((cur + " " + w).trim().length > max) { if (cur) lines.push(cur.trim()); cur = w; } else cur = (cur + " " + w).trim(); });
+  if (cur) lines.push(cur.trim());
+  return lines;
+}
+const MONO = "'IBM Plex Mono',monospace", SANS = "'IBM Plex Sans',sans-serif", DISP = "'Space Grotesk',sans-serif";
+const STC = { mandatory: "#0E7A4A", conditional: "#B7791F", recommended: "#6B7280" };
+const STLABEL = { mandatory: "Mandatory", conditional: "Conditional", recommended: "Recommended" };
+
+/* --------------------------- the model ----------------------------- */
+function buildModel(subtype, market, attrs, b) {
+  const otc = attrs.includes("otc"), fragrance = attrs.includes("fragrance"), organic = attrs.includes("organic"), sensitive = attrs.includes("sensitive");
+  const brandUpper = (b.brand || "").toUpperCase();
+  const displayName = otc ? `${b.productName} SPF 30` : b.productName;
+  const inciBase = "Aqua, Glycerin, Cetearyl Alcohol, Caprylic/Capric Triglyceride, Butyrospermum Parkii Butter, Glyceryl Stearate, Dimethicone, Tocopheryl Acetate, Phenoxyethanol";
+  const inci = fragrance ? inciBase + ", Parfum" : inciBase;
+  const inciLines = wrap(inci, 60);
+  const allergens = fragrance ? "Contains: Linalool, Limonene, Citronellol, Geraniol." : null;
+  const warnings = ["For external use only. Avoid contact with eyes."];
+  if (sensitive) warnings.push("Patch test 24 h before first use.");
+  const warnLines = [];
+  warnings.forEach((w) => wrap(w, 62).forEach((l) => warnLines.push(l)));
+  const claims = [];
+  if (organic) claims.push("Certified organic");
+  if (sensitive) claims.push("Sensitive skin");
+  const drugfacts = otc ? "Sunscreen: also an OTC drug. Drug Facts panel required." : null;
+  let responsible = "", extra = [];
+  if (market === "US") responsible = `Distributed by ${b.brand}, Boston, MA, USA`;
+  if (market === "EU") { responsible = `${b.brand} (Responsible Person), 1 Rue de la Paix, 75002 Paris, FR`; extra.push("Made in EU"); }
+  if (market === "IN") { responsible = `Mfd by ${b.brand} Pvt Ltd. Mfg Lic. No. COS/____`; extra.push("M.R.P. Rs___ incl. taxes"); }
+  const responsibleLines = wrap(responsible, 46);
+
+  const S = (us, eu, iN) => ({ US: us, EU: eu, IN: iN }[market]);
+
+  const raw = [
+    { id: "brand", label: "Brand", value: brandUpper, status: "recommended",
+      cite: "No standalone mandate", why: "Brand identity anchors the pack. Not itself a legal element, but expected on any marketed product.",
+      cons: "None directly, though a pack with no clear identity invites scrutiny." },
+    { id: "name", label: "Statement of identity", value: displayName, status: "mandatory",
+      cite: S("21 CFR 701.11", "Reg 1223/2009 Art. 19(1)(f)", "Cosmetics Rules 2020"),
+      why: "Identifies what the product is so a consumer is not misled about its nature or use.",
+      cons: "Misbranding. The product can be deemed mislabeled and detained or refused." },
+    { id: "function", label: "Function of product", value: subtype.fn, status: S("recommended", "mandatory", "recommended"),
+      cite: S("Part of identity, 21 CFR 701.11", "Art. 19(1)(f)", "Cosmetics Rules 2020"),
+      why: "States what the product does when that is not obvious from the name or the presentation.",
+      cons: "In the EU, absence is a non-compliance and the product can be withdrawn." },
+    { id: "net", label: "Net quantity of contents", value: b.net, status: "mandatory",
+      cite: S("21 CFR 701.13", "Art. 19(1)(b)", "Legal Metrology Rules 2011"),
+      why: "Declares how much product the pack contains, for fair trade and consumer information.",
+      cons: "Legal metrology violation. Fines and refusal of the consignment at import." },
+    { id: "claims", label: "Marketing claims", value: claims.join(", "), status: "conditional", present: claims.length > 0,
+      cite: S("FTC Green Guides", "Reg (EU) 655/2013 (common criteria)", "National claim rules"),
+      why: "Claims like organic or hypoallergenic must be truthful and backed by evidence held on file.",
+      cons: "Deceptive-claims enforcement. FTC action in the US, or a warning and withdrawal in the EU." },
+    { id: "ingredients", label: "Ingredient declaration (INCI)", value: inci, lines: inciLines, status: "mandatory",
+      cite: S("21 CFR 701.3", "Art. 19(1)(g)", "Cosmetics Rules 2020"),
+      why: "Lets consumers and clinicians identify constituents and allergens by their standard INCI names.",
+      cons: "Misbranding, and real recall exposure if a restricted substance or allergen is undisclosed.",
+      note: "Full list in descending order of concentration is required. Shown truncated here." },
+    { id: "allergens", label: "Fragrance allergen declaration", value: allergens || "", status: "conditional", present: !!allergens,
+      cite: S("MoCRA sec. 3505", "Reg (EU) 2023/1545", "Cosmetics Rules 2020"),
+      why: "Named fragrance allergens above the threshold must be declared so sensitized users can avoid them.",
+      cons: "An undeclared sensitizer is a safety failure. Recall and liability.",
+      note: market === "EU" ? "Expanded allergen list is transitioning. Verify the current effective date." : (market === "US" ? "Confirm the current MoCRA final-rule status." : undefined) },
+    { id: "warnings", label: "Warnings and precautions", value: warnings.join(" "), lines: warnLines, status: "mandatory",
+      cite: S("21 CFR 740", "Art. 19(1)(d)", "Cosmetics Rules 2020"),
+      why: "Precautionary statements for safe use of the product.",
+      cons: "Safety non-compliance and product liability if a foreseeable harm was not warned against." },
+    { id: "drugfacts", label: "OTC drug status (sunscreen)", value: drugfacts || "", status: "conditional", present: !!drugfacts,
+      cite: S("21 CFR 201.66", "Rec. 2006/647/EC (SPF claims)", "BIS / CDSCO"),
+      why: "An SPF sunscreen is also an OTC drug in the US and needs a Drug Facts panel and monograph compliance.",
+      cons: "Marketing an unapproved new drug. Enforcement action." },
+    { id: "pao", label: "Period after opening", value: "12M", status: S("recommended", "mandatory", "mandatory"),
+      cite: S("Not mandated (durability optional)", "Art. 19(1)(c)", "Cosmetics Rules 2020"),
+      why: "The open-jar symbol tells the consumer how long the product stays safe once opened.",
+      cons: "In the EU and India, absence is a non-compliance where durability exceeds 30 months." },
+    { id: "batch", label: "Batch code", value: `Batch ${b.batch}`, status: S("recommended", "mandatory", "mandatory"),
+      cite: S("Good practice", "Art. 19(1)(e)", "Cosmetics Rules 2020"),
+      why: "The batch code gives traceability for complaints and recalls back to a production lot.",
+      cons: "Without it a recall cannot be scoped to affected lots. A serious regulatory finding." },
+    { id: "best", label: "Minimum durability", value: `Best before ${b.best}`, status: S("recommended", "conditional", "recommended"),
+      cite: S("Good practice", "Art. 19(1)(c)", "Cosmetics Rules 2020"),
+      why: "A best-before date is required in the EU where the shelf life is under 30 months.",
+      cons: "EU non-compliance where the durability rule applies." },
+    { id: "responsible", label: "Responsible party", value: responsible, lines: responsibleLines, status: "mandatory",
+      cite: S("21 CFR 701.12 (name and place)", "Art. 19(1)(a) (Responsible Person)", "Cosmetics Rules 2020"),
+      why: "A legally accountable entity, reachable at an address, must be identified on the pack.",
+      cons: "No accountable party means the EU pack cannot be placed on the market. US misbranding." },
+    { id: "extra", label: market === "IN" ? "Maximum Retail Price" : "Country of origin", value: extra.join(" · "), lines: extra, status: market === "IN" ? "mandatory" : "conditional", present: extra.length > 0,
+      cite: market === "IN" ? "Legal Metrology Rules 2011" : (market === "EU" ? "Art. 19(1) (imported products)" : "n/a"),
+      why: market === "IN" ? "MRP is mandatory on Indian retail packs." : "Country of origin is required for products imported into the EU.",
+      cons: market === "IN" ? "Legal metrology penalty." : "EU non-compliance for imported goods." },
+  ];
+
+  const present = raw.filter((e) => e.present === undefined ? true : e.present);
+  const values = { brandUpper, displayName, fn: subtype.fn, net: b.net, claims, inciLines, allergens, warnLines, drugfacts, batch: b.batch, best: b.best, responsibleLines, extra, pao: "12M" };
+  return { elements: present, values, market };
+}
+
+/* --------------------------- layout -------------------------------- */
+const BX = 42, RIGHT = 482, VW = 872, VH = 470;
+function layout(model) {
+  const has = (id) => model.elements.some((e) => e.id === id);
+  const boxes = {};
+  boxes.brand = { x: BX, y: 38, w: 220, h: 16 };
+  boxes.name = { x: BX, y: 60, w: 300, h: 30 };
+  boxes.function = { x: BX, y: 94, w: 300, h: 16 };
+  boxes.claims = { x: 300, y: 36, w: RIGHT - 300, h: 16 };
+  boxes.net = { x: 330, y: 62, w: RIGHT - 330, h: 22 };
+
+  const inciN = model.values.inciLines.length;
+  const ingTop = 128, paraTop = 158;
+  const ingLast = paraTop + (inciN - 1) * 13;
+  boxes.ingredients = { x: BX, y: ingTop, w: 440, h: (ingLast - ingTop) + 6 };
+  let y = ingLast + 14;
+  if (has("allergens")) { boxes.allergens = { x: BX, y: y - 11, w: 440, h: 16 }; y += 18; }
+  const warnN = model.values.warnLines.length;
+  boxes.warnings = { x: BX, y: y - 11, w: 440, h: warnN * 13 + 4 }; y += warnN * 13 + 8;
+  if (has("drugfacts")) { boxes.drugfacts = { x: BX, y: y - 11, w: 440, h: 16 }; y += 18; }
+
+  const FOOT = 372;
+  boxes.pao = { x: BX, y: 384, w: 66, h: 52 };
+  boxes.batch = { x: 120, y: 390, w: 170, h: 18 };
+  boxes.best = { x: 120, y: 408, w: 170, h: 18 };
+  const respN = model.values.responsibleLines.length;
+  boxes.responsible = { x: 300, y: 384, w: RIGHT - 300, h: respN * 12 + 4 };
+  boxes.extra = { x: 300, y: 384 + respN * 12 + 6, w: RIGHT - 300, h: (model.values.extra.length || 1) * 12 };
+  return { boxes, FOOT };
+}
+
+/* --------------------------- flat label ---------------------------- */
+function OpenJar({ x, y }) {
+  return <g transform={`translate(${x},${y})`}>
+    <path d="M0 8 h18 v13 a2 2 0 0 1 -2 2 h-14 a2 2 0 0 1 -2 -2 z" fill="none" stroke="#4a4640" strokeWidth="1.5" />
+    <path d="M-1 8 q9 -7 20 0" fill="none" stroke="#4a4640" strokeWidth="1.5" />
+  </g>;
+}
+
+function Card({ x, y, w, color, title, chip, value, cite, why, cons, tag }) {
+  const citeL = wrap(cite, 40), whyL = wrap(why, 44), consL = wrap(cons, 44);
+  let cy = y + 22;
+  const rows = [];
+  rows.push(<text key="t" x={x + 14} y={cy} fontSize="13.5" fontWeight="700" fill="#16243B" fontFamily={DISP}>{title}</text>);
+  if (chip) rows.push(<g key="chip"><rect x={x + w - 96} y={y + 10} width="82" height="16" rx="8" fill={STC[chip] + "22"} /><text x={x + w - 55} y={y + 21.5} fontSize="8.5" textAnchor="middle" fontWeight="700" fill={STC[chip]} fontFamily={MONO} letterSpacing="0.5">{STLABEL[chip].toUpperCase()}</text></g>);
+  cy += 16;
+  if (tag) { rows.push(<g key="tag"><rect x={x + 14} y={cy - 11} width={tag.length * 6.6 + 12} height="17" rx="3" fill={color} /><text x={x + 20} y={cy + 1} fontSize="9.5" fontWeight="700" fill="#fff" fontFamily={MONO}>{tag}</text></g>); cy += 20; }
+  if (value) { rows.push(<text key="v" x={x + 14} y={cy} fontSize="9.5" fill="#8a857d" fontFamily={MONO}>{wrap(value, 46)[0]}</text>); cy += 15; }
+  if (cite) { rows.push(<text key="ch" x={x + 14} y={cy} fontSize="8.5" letterSpacing="1" fill={color} fontFamily={MONO}>CITATION</text>); cy += 12; citeL.forEach((l, i) => rows.push(<text key={"c" + i} x={x + 14} y={cy + i * 12} fontSize="10.5" fill={color} fontFamily={MONO}>{l}</text>)); cy += citeL.length * 12 + 8; }
+  if (why) { rows.push(<text key="wh" x={x + 14} y={cy} fontSize="8.5" letterSpacing="1" fill="#9a958d" fontFamily={MONO}>WHY IT IS THERE</text>); cy += 12; whyL.forEach((l, i) => rows.push(<text key={"w" + i} x={x + 14} y={cy + i * 12.5} fontSize="10.5" fill="#4A5568" fontFamily={SANS}>{l}</text>)); cy += whyL.length * 12.5 + 8; }
+  if (cons) { rows.push(<text key="csh" x={x + 14} y={cy} fontSize="8.5" letterSpacing="1" fill="#C0392B" fontFamily={MONO}>IF MISSING</text>); cy += 12; consL.forEach((l, i) => rows.push(<text key={"cs" + i} x={x + 14} y={cy + i * 12.5} fontSize="10.5" fill="#C0392B" fontFamily={SANS}>{l}</text>)); cy += consL.length * 12.5 + 6; }
+  const h = cy - y + 6;
+  return { h, node: (<g><rect x={x} y={y} width={w} height={h} rx="9" fill="#fff" stroke={color} strokeWidth="1.5" /><rect x={x} y={y} width="4" height={h} rx="2" fill={color} />{rows}</g>) };
+}
+
+function FlatLabel({ model, accent, mode = "inspect", displayId, onHover, audit, printSim, hidden, stamps, flash }) {
+  const { boxes, FOOT } = useMemo(() => layout(model), [model]);
+  const v = model.values;
+  const H = new Set(hidden || []);
+  const die = "#E5399B";
+  const CARDX = 524, CARDW = 324;
+
+  const content = {
+    brand: <text x={BX} y={50} fontSize="11" letterSpacing="2.5" fill="#8a857d" fontFamily={MONO}>{v.brandUpper}</text>,
+    name: <text x={BX} y={84} fontSize="30" fontWeight="700" fill="#16243B" fontFamily={DISP}>{v.displayName}</text>,
+    function: <text x={BX} y={105} fontSize="13" fontStyle="italic" fill="#4A5568" fontFamily={SANS}>{v.fn}</text>,
+    claims: <text x={RIGHT} y={48} fontSize="11" textAnchor="end" fill={accent} fontFamily={MONO}>{v.claims.join("  ·  ")}</text>,
+    net: <text x={RIGHT} y={80} fontSize="18" fontWeight="600" textAnchor="end" fill="#16243B" fontFamily={DISP}>{v.net}</text>,
+    ingredients: <g><text x={BX} y={140} fontSize="10.5" letterSpacing="1.5" fill={accent} fontFamily={MONO}>INGREDIENTS</text>{v.inciLines.map((l, i) => <text key={i} x={BX} y={158 + i * 13} fontSize="11" fill="#4a4640" fontFamily={SANS}>{l}</text>)}</g>,
+    allergens: v.allergens ? <text x={BX} y={boxes.allergens?.y + 11} fontSize="11" fontWeight="600" fill="#4a4640" fontFamily={SANS}>{v.allergens}</text> : null,
+    warnings: <g>{v.warnLines.map((l, i) => <text key={i} x={BX} y={boxes.warnings.y + 11 + i * 13} fontSize="10.5" fill="#4A5568" fontFamily={SANS}>{l}</text>)}</g>,
+    drugfacts: v.drugfacts ? <text x={BX} y={boxes.drugfacts?.y + 11} fontSize="10.5" fill="#B45309" fontFamily={SANS}>{v.drugfacts}</text> : null,
+    pao: <g><OpenJar x={BX} y={388} /><text x={BX + 24} y={406} fontSize="13" fontWeight="600" fill="#4a4640" fontFamily={MONO}>{v.pao}</text></g>,
+    batch: <text x={120} y={404} fontSize="10.5" fill="#4a4640" fontFamily={MONO}>Batch {v.batch}</text>,
+    best: <text x={120} y={422} fontSize="10.5" fill="#4a4640" fontFamily={MONO}>Best before {v.best}</text>,
+    responsible: <g>{v.responsibleLines.map((l, i) => <text key={i} x={RIGHT} y={396 + i * 12} fontSize="9.5" textAnchor="end" fill="#4A5568" fontFamily={SANS}>{l}</text>)}</g>,
+    extra: <g>{v.extra.map((l, i) => <text key={i} x={RIGHT} y={384 + v.responsibleLines.length * 12 + 6 + i * 12} fontSize="9.5" textAnchor="end" fill="#8a857d" fontFamily={MONO}>{l}</text>)}</g>,
+  };
+
+  const el = model.elements.find((e) => e.id === displayId);
+  let inspectCard = null;
+  if (mode === "inspect" && el && boxes[displayId] && !H.has(displayId)) {
+    const bx = boxes[displayId];
+    const cardY0 = Math.min(Math.max(bx.y - 8, 20), VH - 220);
+    const c = Card({ x: CARDX, y: cardY0, w: CARDW, color: die, title: el.label, chip: el.status, value: el.value, cite: el.cite, why: el.why, cons: el.cons });
+    const ex = Math.min(bx.x + bx.w, 508), ey = bx.y + bx.h / 2, cyMid = cardY0 + 22;
+    inspectCard = <g style={{ pointerEvents: "none" }}>
+      <g key={flash} className="lp-hl"><rect x={bx.x - 5} y={bx.y - 5} width={bx.w + 10} height={bx.h + 10} rx="6" fill={die} fillOpacity="0.07" stroke={die} strokeWidth="1.6" /></g>
+      <polyline points={`${ex},${ey} 515,${ey} 515,${cyMid} ${CARDX},${cyMid}`} fill="none" stroke={die} strokeWidth="1.4" />
+      <circle cx={ex} cy={ey} r="3" fill={die} />
+      {c.node}
+    </g>;
+  }
+
+  let stampNodes = null;
+  if (mode === "intro" && stamps && stamps.length) {
+    let sy = 20;
+    stampNodes = stamps.map((s, i) => {
+      const bx = boxes[s.id];
+      if (!bx) return null;
+      const c = Card({ x: CARDX, y: sy, w: CARDW, color: "#C0392B", title: s.title, value: "", cite: "", why: s.text, cons: "", tag: s.tag });
+      const ex = Math.min(bx.x + bx.w, 508), ey = bx.y + bx.h / 2, cyMid = sy + 22;
+      const node = <g key={i} style={{ pointerEvents: "none" }}>
+        <rect x={bx.x - 5} y={bx.y - 5} width={bx.w + 10} height={bx.h + 10} rx="6" fill="#C0392B" fillOpacity="0.06" stroke="#C0392B" strokeWidth="1.3" strokeDasharray="4 3" />
+        <line x1={bx.x - 3} y1={bx.y - 3} x2={bx.x + bx.w + 3} y2={bx.y + bx.h + 3} stroke="#C0392B" strokeWidth="1.2" />
+        <polyline points={`${ex},${ey} 515,${ey} 515,${cyMid} ${CARDX},${cyMid}`} fill="none" stroke="#C0392B" strokeWidth="1.2" strokeDasharray="3 3" />
+        {c.node}
+      </g>;
+      sy += c.h + 12;
+      return node;
+    });
+  }
+
+  const auditBadge = (id, status) => {
+    const bx = boxes[id]; if (!bx) return null;
+    const col = STC[status];
+    return <g key={"a" + id} transform={`translate(${bx.x - 9},${bx.y - 9})`}>
+      <circle cx="7" cy="7" r="7" fill="#fff" stroke={col} strokeWidth="1.3" />
+      {status === "mandatory"
+        ? <path d="M3.6 7.2 L6 9.4 L10.4 4.6" fill="none" stroke={col} strokeWidth="1.6" />
+        : status === "conditional"
+          ? <text x="7" y="10.3" fontSize="8" textAnchor="middle" fontWeight="700" fill={col}>!</text>
+          : <circle cx="7" cy="7" r="2" fill={col} />}
+    </g>;
+  };
+
+  return (
+    <svg viewBox={`0 0 ${VW} ${VH}`} width="100%" style={{ display: "block" }} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <filter id="paper"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" result="n" /><feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.04 0" /></filter>
+      </defs>
+      <rect x="16" y="16" width="492" height="438" rx="10" fill="#fff" stroke="#E2E6EC" />
+      <rect x="16" y="16" width="492" height="7" rx="10" fill={accent} />
+      <rect x="16" y="20" width="492" height="4" fill={accent} />
+      {printSim && <rect x="16" y="16" width="492" height="438" rx="10" filter="url(#paper)" />}
+      {printSim && <g stroke="#111" strokeWidth="0.8">
+        <line x1="8" y1="16" x2="14" y2="16" /><line x1="16" y1="8" x2="16" y2="14" />
+        <line x1="510" y1="16" x2="516" y2="16" /><line x1="508" y1="8" x2="508" y2="14" />
+        <line x1="8" y1="454" x2="14" y2="454" /><line x1="16" y1="456" x2="16" y2="462" />
+        <line x1="510" y1="454" x2="516" y2="454" /><line x1="508" y1="456" x2="508" y2="462" />
+        <rect x="10" y="10" width="504" height="450" rx="10" fill="none" stroke="#111" strokeOpacity="0.25" strokeDasharray="2 3" />
+      </g>}
+      <line x1={BX} y1="122" x2={RIGHT} y2="122" stroke="#E7E2DA" />
+      <line x1={BX} y1={FOOT} x2={RIGHT} y2={FOOT} stroke="#E7E2DA" />
+      {model.elements.map((e) => (H.has(e.id) ? null : <g key={e.id}>{content[e.id]}</g>))}
+      {mode === "inspect" && audit && model.elements.map((e) => auditBadge(e.id, e.status))}
+      {mode === "inspect" && model.elements.map((e) => {
+        const bx = boxes[e.id]; if (!bx) return null;
+        return <rect key={"h" + e.id} x={bx.x - 5} y={bx.y - 5} width={bx.w + 10} height={bx.h + 10} fill="transparent" style={{ cursor: "pointer" }} onMouseEnter={() => onHover && onHover(e.id)} />;
+      })}
+      {mode === "inspect" && !el && <g style={{ pointerEvents: "none" }}>
+        <rect x={CARDX} y="150" width={CARDW} height="150" rx="9" fill="#fff" stroke="#E2E6EC" strokeDasharray="4 4" />
+        <text x={CARDX + CARDW / 2} y="205" fontSize="12" textAnchor="middle" fill="#8a857d" fontFamily={MONO}>Every pixel can defend itself.</text>
+        <text x={CARDX + CARDW / 2} y="228" fontSize="11" textAnchor="middle" fill="#8a857d" fontFamily={SANS}>Hover any element, or click a rule below,</text>
+        <text x={CARDX + CARDW / 2} y="244" fontSize="11" textAnchor="middle" fill="#8a857d" fontFamily={SANS}>to see the citation and what it prevents.</text>
+      </g>}
+      {inspectCard}
+      {stampNodes}
+    </svg>
+  );
+}
+
+/* --------------------------- vessels ------------------------------- */
+const BODY = "#F1EEE8", HI = "#FFFFFF", SH = "#000000", FR = {
+  jar: { x: 48, y: 120, w: 64, h: 62 }, tube: { x: 56, y: 98, w: 48, h: 92 }, airless: { x: 56, y: 74, w: 48, h: 120 },
+  dropper: { x: 56, y: 82, w: 48, h: 116 }, mist: { x: 56, y: 74, w: 48, h: 124 }, sachet: { x: 52, y: 66, w: 56, h: 128 },
+};
+function Vessel({ id, accent, L }) {
+  const shapes = {
+    jar: <><rect x="42" y="96" width="76" height="104" rx="12" fill={BODY} /><rect x="100" y="100" width="16" height="96" rx="8" fill={SH} opacity="0.06" /><rect x="48" y="104" width="9" height="86" rx="4.5" fill={HI} opacity="0.5" /><rect x="36" y="52" width="88" height="50" rx="10" fill={accent} /><rect x="44" y="58" width="70" height="7" rx="3.5" fill={HI} opacity="0.26" /><rect x="36" y="90" width="88" height="12" rx="6" fill="#000" opacity="0.12" /></>,
+    tube: <><rect x="64" y="24" width="32" height="30" rx="6" fill={accent} /><rect x="70" y="52" width="20" height="10" fill={accent} opacity="0.8" /><path d="M52 94 Q52 66 70 60 L90 60 Q108 66 108 94 Z" fill={BODY} /><rect x="52" y="90" width="56" height="118" rx="6" fill={BODY} /><rect x="98" y="94" width="10" height="108" rx="5" fill={SH} opacity="0.06" /><rect x="57" y="96" width="7" height="100" rx="3.5" fill={HI} opacity="0.5" /><rect x="52" y="200" width="56" height="10" rx="2" fill="#e7e2da" /></>,
+    airless: <><rect x="66" y="16" width="28" height="16" rx="3" fill={accent} /><rect x="90" y="20" width="10" height="6" rx="1.5" fill={accent} /><rect x="62" y="32" width="36" height="14" rx="3" fill={accent} opacity="0.85" /><rect x="50" y="46" width="60" height="168" rx="10" fill={BODY} /><rect x="100" y="50" width="10" height="160" rx="5" fill={SH} opacity="0.06" /><rect x="56" y="52" width="8" height="150" rx="4" fill={HI} opacity="0.5" /></>,
+    dropper: <><rect x="70" y="12" width="20" height="16" rx="8" fill={accent} /><rect x="60" y="28" width="40" height="20" rx="4" fill={accent} /><path d="M52 60 Q52 50 62 50 L98 50 Q108 50 108 60 Z" fill="#EDE4D6" /><rect x="52" y="56" width="56" height="154" rx="8" fill="#EDE4D6" /><rect x="98" y="60" width="10" height="146" rx="5" fill={SH} opacity="0.07" /><rect x="57" y="62" width="7" height="140" rx="3.5" fill={HI} opacity="0.45" /></>,
+    mist: <><rect x="70" y="16" width="20" height="12" rx="2" fill={accent} /><rect x="88" y="19" width="12" height="4" rx="1" fill={accent} /><rect x="60" y="28" width="40" height="16" rx="3" fill={accent} opacity="0.85" /><rect x="50" y="44" width="60" height="170" rx="10" fill={BODY} /><rect x="100" y="48" width="10" height="162" rx="5" fill={SH} opacity="0.06" /><rect x="56" y="50" width="8" height="152" rx="4" fill={HI} opacity="0.5" /></>,
+    sachet: <><rect x="40" y="46" width="80" height="166" rx="6" fill={BODY} /><rect x="40" y="46" width="6" height="166" fill="#000" opacity="0.05" /><rect x="114" y="46" width="6" height="166" fill="#000" opacity="0.05" /><path d="M40 46 l6 5 l6 -5 l6 5 l6 -5 l6 5 l6 -5 l6 5 l6 -5 l6 5 l6 -5 l6 5 l6 -5 l6 5 l6 -5 v6 h-80 z" fill="#000" opacity="0.06" /><rect x="48" y="52" width="6" height="150" rx="3" fill={HI} opacity="0.4" /></>,
+  };
+  const f = FR[id], cx = f.x + f.w / 2;
+  return (
+    <svg viewBox="0 0 160 250" width="100%" style={{ maxHeight: 320, display: "block" }} xmlns="http://www.w3.org/2000/svg">
+      <ellipse cx="80" cy="238" rx="46" ry="7" fill="#000" opacity="0.06" />
+      {shapes[id]}
+      <rect x={f.x} y={f.y} width={f.w} height={f.h} rx="3" fill="#fff" opacity="0.94" />
+      <rect x={f.x} y={f.y} width={f.w} height={f.h} rx="3" fill="none" stroke="#000" strokeOpacity="0.07" strokeWidth="0.6" />
+      <text x={cx} y={f.y + f.h * 0.19} fontSize="3.4" letterSpacing="0.5" textAnchor="middle" fill="#9a948c" fontFamily={MONO}>{L.values.brandUpper.slice(0, 15)}</text>
+      <text x={cx} y={f.y + f.h * 0.4} fontSize="6.4" fontWeight="700" textAnchor="middle" fill={accent} fontFamily={DISP}>{L.values.displayName.slice(0, 13)}</text>
+      <rect x={cx - 7} y={f.y + f.h * 0.46} width="14" height="0.7" fill={accent} opacity="0.7" />
+      <text x={cx} y={f.y + f.h * 0.6} fontSize="3.1" textAnchor="middle" fill="#6a655e" fontFamily={SANS}>{L.values.fn.slice(0, 24)}</text>
+      <text x={cx} y={f.y + f.h * 0.78} fontSize="4" fontWeight="600" textAnchor="middle" fill="#3a3733" fontFamily={SANS}>{L.values.net}</text>
+    </svg>
+  );
+}
+
+/* --------------------------- command palette ----------------------- */
+function Palette({ onClose, onApply }) {
+  const [q, setQ] = useState("");
+  const vocab = useMemo(() => {
+    const V = [];
+    SUBTYPES.forEach((s) => V.push({ kind: "type", id: s.id, words: [s.id, s.label.toLowerCase()], label: `Type: ${s.label}` }));
+    Object.entries(CONTAINERS).forEach(([id, l]) => V.push({ kind: "container", id, words: [id, l.toLowerCase()], label: `Container: ${l}` }));
+    MARKETS.forEach((m) => V.push({ kind: "market", id: m.id, words: [m.id.toLowerCase(), m.label.toLowerCase()], label: `Market: ${m.label}` }));
+    ATTRS.forEach((a) => V.push({ kind: "attr", id: a.id, words: [a.id, a.label.toLowerCase(), ...(a.id === "otc" ? ["spf", "sunscreen"] : [])], label: `Attribute: ${a.label}` }));
+    return V;
+  }, []);
+  const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const matched = [];
+  tokens.forEach((t) => { const m = vocab.find((v) => v.words.some((w) => w.startsWith(t))); if (m && !matched.find((x) => x.kind === m.kind && x.id === m.id)) matched.push(m); });
+  const apply = () => { if (matched.length) onApply(matched); onClose(); };
+  return (
+    <div className="lp-palette" onClick={onClose}>
+      <div className="lp-palbox" onClick={(e) => e.stopPropagation()}>
+        <div className="lp-palin"><Command size={16} /><input autoFocus value={q} placeholder="cosmetic jar EU fragrance…" onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") apply(); if (e.key === "Escape") onClose(); }} /><kbd>esc</kbd></div>
+        {matched.length > 0 && <div className="lp-palmatch">{matched.map((m, i) => <span key={i} className="lp-paltag">{m.label}</span>)}</div>}
+        <div className="lp-palhint">Type any mix of a product type, container, market, and attributes, then press <kbd>enter</kbd> to assemble the whole state at once.</div>
+        <div className="lp-palex">Try: <em>serum dropper US</em> · <em>cream jar EU fragrance organic</em> · <em>mist IN sunscreen</em></div>
+      </div>
+    </div>
+  );
+}
+
+/* --------------------------- recall intro -------------------------- */
+const INTRO_STEPS = [
+  { title: "A compliant label.", sub: "Every element here earns its place." },
+  { remove: "batch", stamp: { id: "batch", title: "Traceability broken", text: "Batch code gone. A recall cannot be scoped to affected lots.", tag: "FDA Form 483" } },
+  { remove: "allergens", stamp: { id: "allergens", title: "Undeclared sensitizer", text: "Fragrance allergen line removed. Sensitized users have no warning.", tag: "Class recall" } },
+  { remove: "net", stamp: { id: "net", title: "Short measure", text: "Net quantity removed from the front. Fair-trade violation.", tag: "Import refusal" } },
+  { remove: "responsible", stamp: { id: "responsible", title: "No one accountable", text: "Responsible party gone. Nobody is legally answerable for the product.", tag: "Warning letter" } },
+  { final: true },
+];
+function Intro({ onEnter }) {
+  const reduce = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const [step, setStep] = useState(reduce ? INTRO_STEPS.length - 1 : 0);
+  useEffect(() => {
+    if (step >= INTRO_STEPS.length - 1) return;
+    const t = setTimeout(() => setStep((s) => s + 1), step === 0 ? 1400 : 1500);
+    return () => clearTimeout(t);
+  }, [step]);
+  const introModel = useMemo(() => buildModel(SUBTYPES[0], "US", ["fragrance", "organic"], { productName: "Radiance", brand: "Aurelia", net: "50 ml", batch: "A2451", best: "06/2028" }), []);
+  const hidden = [], stamps = [];
+  for (let i = 1; i <= step && i < INTRO_STEPS.length; i++) { const s = INTRO_STEPS[i]; if (s.remove) { hidden.push(s.remove); stamps.push(s.stamp); } }
+  const cur = INTRO_STEPS[Math.min(step, INTRO_STEPS.length - 1)];
+  const final = step >= INTRO_STEPS.length - 1;
+  return (
+    <div className="lp-introwrap">
+      <button className="lp-skip" onClick={onEnter}>Skip <X size={13} /></button>
+      <div className="lp-introcard">
+        <div className="lp-introhead">
+          <div className="lp-introkick">LABELPATH</div>
+          <div className="lp-introttl">{final ? "Every one of these was preventable." : (cur.title || "Watch what a missing element costs.")}</div>
+          {!final && cur.sub && <div className="lp-introsub">{cur.sub}</div>}
+        </div>
+        <div className="lp-introsvg"><FlatLabel model={introModel} accent="#2F6E6A" mode="intro" hidden={hidden} stamps={stamps} /></div>
+        {final && <div className="lp-introcta"><div className="lp-ctatext">Tell LabelPath what you are making, and it will tell you what the law wants, and show you the label.</div><button className="lp-enter" onClick={onEnter}><Play size={15} /> Enter LabelPath</button></div>}
+      </div>
+    </div>
+  );
+}
+
+/* ============================== APP ================================ */
+function LabelPathInspector() {
+  const [entered, setEntered] = useState(false);
+  const [subId, setSubId] = useState("cream");
+  const [container, setContainer] = useState("jar");
+  const [market, setMarket] = useState("US");
+  const [attrs, setAttrs] = useState(["fragrance"]);
+  const [accent, setAccent] = useState("teal");
+  const [view, setView] = useState("flat");
+  const [audit, setAudit] = useState(false);
+  const [printSim, setPrintSim] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [brand, setBrand] = useState({ productName: "Radiance", brand: "Aurelia", net: "50 ml", batch: "A2451", best: "06/2028" });
+  const [hoverId, setHoverId] = useState(null);
+  const [lockId, setLockId] = useState(null);
+  const [flash, setFlash] = useState(0);
+  const [cls, setCls] = useState("cosmetic");
+  const [bg, setBg] = useState("white");
+  const [pattern, setPattern] = useState("none");
+  const [style, setStyle] = useState("minimal");
+  const [fluid, setFluid] = useState("clear");
+  const [mfg, setMfg] = useState("06/2026");
+  const [exp, setExp] = useState("06/2029");
+
+  const subtype = SUBTYPES.find((s) => s.id === subId);
+  const accentHex = ACCENTS.find((a) => a.id === accent).hex;
+  const displayId = hoverId || lockId;
+
+  useEffect(() => {
+    const h = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPaletteOpen((o) => !o); }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
+
+  const chooseSub = (s) => { setSubId(s.id); if (!s.containers.includes(container)) setContainer(s.containers[0]); };
+  const toggleAttr = (id) => setAttrs((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
+  const setField = (k, val) => setBrand((b) => ({ ...b, [k]: val }));
+  const pickRule = (id) => { setLockId(id); setFlash(Date.now()); };
+  const applyPalette = useCallback((matched) => {
+    matched.forEach((m) => {
+      if (m.kind === "type") { const s = SUBTYPES.find((x) => x.id === m.id); setSubId(s.id); if (!s.containers.includes(container)) setContainer(s.containers[0]); }
+      if (m.kind === "container") setContainer(m.id);
+      if (m.kind === "market") setMarket(m.id);
+      if (m.kind === "attr") setAttrs((p) => p.includes(m.id) ? p : [...p, m.id]);
+    });
+  }, [container]);
+
+  const model = useMemo(() => buildModel(subtype, market, attrs, brand), [subtype, market, attrs, brand]);
+  const counts = model.elements.reduce((a, e) => { a[e.status] = (a[e.status] || 0) + 1; return a; }, {});
+
+  const observations = model.elements.filter((e) => e.status === "conditional" || e.note).map((e) => ({
+    id: e.id,
+    text: e.note ? `${e.label}. ${e.note}` : `${e.label} is present but is a conditional element that depends on the product or its claims. Confirm the trigger and that supporting records exist. Reference: ${e.cite}.`,
+    cite: e.cite,
+  }));
+
+  const bgObj = LABEL_BG.find((x) => x.id === bg);
+  const fluidHex = FLUIDS.find((f) => f.id === fluid).hex;
+  const clsContainers = Object.entries(CONTLIB).filter(([, c]) => c.cls.includes(cls));
+  const cdef = CLASS_DEFAULTS[cls];
+  const faceOpts = { brand: brand.brand, name: cls === "cosmetic" ? model.values.displayName : brand.productName, descriptor: cls === "cosmetic" ? subtype.fn : cdef.descriptor, net: brand.net, back: cdef.back, responsible: cdef.responsible, heading: cdef.heading, batch: brand.batch, mfg, exp, bg: bgObj.hex, ink: bgObj.ink, accent: accentHex, cls, market, pattern, style };
+  const compRows = cls === "cosmetic"
+    ? model.elements.map((e) => ({ id: e.id, label: e.label, cite: e.cite, status: e.status, note: e.note }))
+    : ((COMPLIANCE[cls] && COMPLIANCE[cls][market]) || []).map((r, i) => ({ id: "c" + i, label: r.n, cite: r.c, status: r.s, note: r.note }));
+  const compCounts = compRows.reduce((a, r) => { a[r.status] = (a[r.status] || 0) + 1; return a; }, {});
+  const chooseClass = (id) => { setCls(id); const d = CLASS_DEFAULTS[id]; setBrand({ productName: d.name, brand: d.brand, net: d.net, batch: brand.batch, best: brand.best }); setContainer(d.container); const cc = CONTLIB[d.container]; if (cc && cc.fluidDefault) setFluid(cc.fluidDefault); if (id !== "cosmetic") setView("vessel"); };
+  const chooseContainer = (id) => { setContainer(id); const cc = CONTLIB[id]; if (cc && cc.fluidDefault) setFluid(cc.fluidDefault); };
+
+  return (
+    <div className="lp-root" onMouseLeave={() => setHoverId(null)}>
+      <style>{CSS}</style>
+      {!entered && <Intro onEnter={() => setEntered(true)} />}
+      {paletteOpen && <Palette onClose={() => setPaletteOpen(false)} onApply={applyPalette} />}
+
+      <div className="lp-wrap">
+        <header className="lp-head">
+          <div>
+            <div className="lp-logo">Label<em>Path</em> <b>Inspector</b></div>
+            <div className="lp-tag">A label where every element can defend itself. Hover any part of the artwork to see its citation, its reason, and what it prevents.</div>
+          </div>
+          <div className="lp-toolbar">
+            <button className={"lp-tool" + (audit ? " on" : "")} onClick={() => setAudit((a) => !a)} title="Audit mode"><ScanSearch size={14} /> Audit</button>
+            <button className={"lp-tool" + (printSim ? " on" : "")} onClick={() => setPrintSim((p) => !p)} title="Print proof"><Printer size={14} /> Proof</button>
+            <button className="lp-tool" onClick={() => setPaletteOpen(true)} title="Command palette"><Command size={13} /> K</button>
+            <button className="lp-tool" onClick={() => setEntered(false)} title="Replay intro"><RotateCcw size={13} /></button>
+          </div>
+        </header>
+
+        <div className="lp-grid">
+          <aside className="lp-panel">
+            <div className="lp-sec"><div className="lp-step"><i>00</i> Class</div><div className="lp-attrs">{CLASSES3.map((c) => <button key={c.id} className={"lp-attr" + (cls === c.id ? " on" : "")} onClick={() => chooseClass(c.id)}><c.Icon size={13} /> {c.label}</button>)}</div></div>
+            {cls === "cosmetic" && <div className="lp-sec"><div className="lp-step"><i>01</i> Product</div><div className="lp-chips">{SUBTYPES.map((s) => <button key={s.id} className={"lp-chip" + (subId === s.id ? " on" : "")} onClick={() => chooseSub(s)}>{s.label}</button>)}</div></div>}
+            <div className="lp-sec"><div className="lp-step"><i>02</i> Container</div><div className="lp-chips">{clsContainers.map(([cid, cc]) => <button key={cid} className={"lp-chip" + (container === cid ? " on" : "")} onClick={() => chooseContainer(cid)}>{cc.label}</button>)}</div></div>
+            <div className="lp-sec"><div className="lp-step"><i>03</i> Market</div><div className="lp-seg">{MARKETS.map((m) => <button key={m.id} className={"lp-segb" + (market === m.id ? " on" : "")} onClick={() => setMarket(m.id)}>{m.id}</button>)}</div></div>
+            <div className="lp-sec"><div className="lp-step"><i>04</i> Brand details</div><div className="lp-fields">
+              <div className="lp-field full"><label>Product name</label><input value={brand.productName} onChange={(e) => setField("productName", e.target.value)} /></div>
+              <div className="lp-field full"><label>Brand</label><input value={brand.brand} onChange={(e) => setField("brand", e.target.value)} /></div>
+              <div className="lp-field"><label>Net</label><input value={brand.net} onChange={(e) => setField("net", e.target.value)} /></div>
+              <div className="lp-field"><label>Batch</label><input value={brand.batch} onChange={(e) => setField("batch", e.target.value)} /></div>
+              <div className="lp-field"><label>Best before</label><input value={brand.best} onChange={(e) => setField("best", e.target.value)} /></div>
+              <div className="lp-field"><label>MFG date</label><input value={mfg} onChange={(e) => setMfg(e.target.value)} /></div>
+              <div className="lp-field"><label>EXP date</label><input value={exp} onChange={(e) => setExp(e.target.value)} /></div>
+            </div>
+              <div className="lp-swlabel">Brand colour</div><div className="lp-swatches">{ACCENTS.map((a) => <button key={a.id} title={a.name} className={"lp-sw" + (accent === a.id ? " on" : "")} style={{ background: a.hex }} onClick={() => setAccent(a.id)} />)}</div></div>
+            {cls === "cosmetic" && <div className="lp-sec"><div className="lp-step"><i>05</i> Attributes</div><div className="lp-attrs">{ATTRS.map((a) => <button key={a.id} className={"lp-attr" + (attrs.includes(a.id) ? " on" : "")} onClick={() => toggleAttr(a.id)}><a.Icon size={13} /> {a.label}</button>)}</div></div>}
+            <div className="lp-sec"><div className="lp-step"><PaletteIcon size={13} /> Label design</div>
+              <div className="lp-swlabel">Background</div><div className="lp-swatches">{LABEL_BG.map((b) => <button key={b.id} title={b.id} className={"lp-sw" + (bg === b.id ? " on" : "")} style={{ background: b.hex }} onClick={() => setBg(b.id)} />)}</div>
+              <div className="lp-swlabel">Layout style</div><div className="lp-seg">{STYLES.map((s) => <button key={s.id} className={"lp-segb" + (style === s.id ? " on" : "")} onClick={() => setStyle(s.id)}>{s.label}</button>)}</div>
+              <div className="lp-swlabel">Pattern</div><div className="lp-seg">{PATTERNS.map((s) => <button key={s.id} className={"lp-segb" + (pattern === s.id ? " on" : "")} onClick={() => setPattern(s.id)}>{s.label}</button>)}</div>
+            </div>
+            {CONTLIB[container] && CONTLIB[container].fluid && <div className="lp-sec"><div className="lp-step"><Droplet size={13} /> Fluid colour</div><div className="lp-chips">{FLUIDS.map((f) => <button key={f.id} className={"lp-chip" + (fluid === f.id ? " on" : "")} onClick={() => setFluid(f.id)}><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: "50%", background: f.hex, marginRight: 6, verticalAlign: "middle", boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.15)" }} />{f.name}</button>)}</div><div className="lp-honesty">FD&amp;C entries are the approved colour additives, shown as representative colours.</div></div>}
+          </aside>
+
+          <div className="lp-main">
+            <div className="lp-stage">
+              <div className="lp-shead">
+                <div className="lp-crumb"><b>{faceOpts.name}</b><ChevronRight size={13} /><b>{CONTLIB[container] ? CONTLIB[container].label : container}</b><ChevronRight size={13} /><b>{market}</b></div>
+                <div className="lp-vtoggle">
+                  {cls === "cosmetic" && <button className={"lp-vt" + (view === "flat" ? " on" : "")} onClick={() => setView("flat")}><FileText size={13} /> Flat + inspect</button>}
+                  <button className={"lp-vt" + (view === "vessel" ? " on" : "")} onClick={() => setView("vessel")}><Box size={13} /> On container</button>
+                  <button className={"lp-vt" + (view === "carrier" ? " on" : "")} onClick={() => setView("carrier")}><ScanSearch size={13} /> Data carrier</button>
+                  <button className={"lp-vt" + (view === "sizing" ? " on" : "")} onClick={() => setView("sizing")}><Ruler size={13} /> PDP &amp; size</button>
+                </div>
+              </div>
+              <div className="lp-preview" style={view === "vessel" ? { padding: 0 } : undefined}>
+                {view === "carrier"
+                  ? <Carrier cls={cls} market={market} brand={brand} accentHex={accentHex} />
+                  : view === "sizing"
+                  ? <Sizer cls={cls} market={market} container={container} />
+                  : (view === "flat" && cls === "cosmetic")
+                  ? <FlatLabel model={model} accent={accentHex} mode="inspect" displayId={displayId} onHover={setHoverId} audit={audit} printSim={printSim} flash={flash} />
+                  : <Viewer3D container={CONTLIB[container]} opts={faceOpts} fluidHex={fluidHex} accentHex={accentHex} cls={cls} market={market} />}
+              </div>
+            </div>
+
+            <div className="lp-comp" onMouseLeave={() => setHoverId(null)}>
+              <div className="lp-comph"><ClipboardCheck size={17} /> Compliance map, {MARKETS.find((m) => m.id === market).label}
+                <span className="lp-counts">{compCounts.mandatory ? <em className="m">{compCounts.mandatory} mandatory</em> : null}{compCounts.conditional ? <em className="c">{compCounts.conditional} conditional</em> : null}</span>
+              </div>
+              {compRows.map((e) => (
+                <div key={e.id} className={"lp-crow" + (displayId === e.id ? " active" : "")} onMouseEnter={() => setHoverId(e.id)} onClick={() => pickRule(e.id)}>
+                  <span className="lp-cdot" style={{ background: STC[e.status] }} />
+                  <div className="lp-cbody">
+                    <div className="lp-cn">{e.label}</div>
+                    <div className="lp-cc">{e.cite}</div>
+                    {e.note && <div className="lp-cnote">{e.note}</div>}
+                  </div>
+                  <span className="lp-cst" style={{ background: STC[e.status] + "1e", color: STC[e.status] }}>{STLABEL[e.status]}</span>
+                </div>
+              ))}
+              <div className="lp-honesty">Status reflects the marketed pack for this market. Conditional items depend on the product, a claim, or a transition date, and are flagged rather than asserted. This is a decision-support tool, not regulatory advice.</div>
+            </div>
+
+            {audit && (
+              <div className="lp-audit">
+                <div className="lp-audhead"><ScanSearch size={16} /> Self-audit, {MARKETS.find((m) => m.id === market).label}</div>
+                {observations.length === 0
+                  ? <div className="lp-audclean">No observations. Every reviewed element is satisfied for this market.</div>
+                  : observations.map((o, i) => <div key={o.id} className="lp-obs"><span className="lp-obsn">OBS {i + 1}</span><div>{o.text}</div></div>)}
+                <div className="lp-audnote">Written in the register a reviewer would use. The tool grades its own output rather than assuming it passed.</div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="lp-foot">LabelPath &middot; inspection layer + 3D container studio &middot; demonstration tool, not regulatory advice</div>
+      </div>
+    </div>
+  );
+}
+
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+.lp-root{ --paper:#EBEEEC; --card:#FFF; --ink:#16243B; --ink2:#4A5568; --die:#E5399B; --line:#E2E6EC; --line2:#EDF0F4; --mand:#0E7A4A; --cond:#B7791F;
+  font-family:'IBM Plex Sans',ui-sans-serif,system-ui,sans-serif; color:var(--ink); background:var(--paper); min-height:100%; -webkit-font-smoothing:antialiased; line-height:1.5; position:relative; }
+.lp-root *{ box-sizing:border-box; }
+.lp-wrap{ max-width:1240px; margin:0 auto; padding:24px 20px 60px; }
+.lp-head{ display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; padding-bottom:16px; border-bottom:2px solid var(--ink); margin-bottom:20px; }
+.lp-logo{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:28px; letter-spacing:-0.02em; }
+.lp-logo em{ font-style:normal; color:var(--die); }
+.lp-logo b{ font-weight:500; font-size:13px; color:var(--ink2); margin-left:8px; letter-spacing:0.12em; text-transform:uppercase; font-family:'IBM Plex Mono',monospace; }
+.lp-tag{ font-size:13px; color:var(--ink2); max-width:64ch; margin-top:5px; }
+.lp-toolbar{ display:flex; gap:7px; flex-wrap:wrap; }
+.lp-tool{ border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:7px; padding:7px 11px; font-size:12px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; font-family:inherit; transition:all .12s; }
+.lp-tool:hover{ border-color:var(--ink); }
+.lp-tool.on{ background:var(--die); color:#fff; border-color:var(--die); }
+
+.lp-grid{ display:grid; grid-template-columns:320px minmax(0,1fr); gap:20px; align-items:start; }
+@media (max-width:1000px){ .lp-grid{ grid-template-columns:1fr; } }
+.lp-panel{ background:var(--card); border:1px solid var(--line); border-radius:10px; }
+.lp-sec{ padding:14px 15px 16px; border-bottom:1px solid var(--line2); } .lp-sec:last-child{ border-bottom:none; }
+.lp-step{ display:flex; align-items:center; gap:8px; font-family:'IBM Plex Mono',monospace; font-size:10.5px; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink2); margin-bottom:11px; }
+.lp-step i{ color:var(--die); font-style:normal; font-weight:600; }
+.lp-chips{ display:flex; flex-wrap:wrap; gap:7px; }
+.lp-chip{ border:1px solid var(--line); background:var(--card); border-radius:7px; padding:7px 11px; font-size:12.5px; cursor:pointer; transition:all .12s; color:var(--ink); font-family:inherit; }
+.lp-chip:hover{ border-color:var(--ink); } .lp-chip.on{ background:var(--ink); color:#fff; border-color:var(--ink); }
+.lp-seg{ display:flex; flex-wrap:wrap; gap:6px; } .lp-segb{ border:1px solid var(--line); background:var(--card); border-radius:999px; padding:6px 13px; font-size:12px; cursor:pointer; transition:all .12s; color:var(--ink); font-family:inherit; } .lp-segb.on{ background:var(--ink); color:#fff; border-color:var(--ink); }
+.lp-fields{ display:grid; grid-template-columns:1fr 1fr; gap:9px; } .lp-field{ display:flex; flex-direction:column; gap:3px; } .lp-field.full{ grid-column:1 / -1; }
+.lp-field label{ font-size:10.5px; color:var(--ink2); font-family:'IBM Plex Mono',monospace; }
+.lp-field input{ border:1px solid var(--line); border-radius:6px; padding:7px 9px; font-size:12.5px; font-family:inherit; color:var(--ink); background:var(--card); }
+.lp-field input:focus{ outline:none; border-color:var(--die); box-shadow:0 0 0 3px rgba(229,57,155,0.12); }
+.lp-swlabel{ font-size:10.5px; color:var(--ink2); font-family:'IBM Plex Mono',monospace; margin:12px 0 6px; }
+.lp-swatches{ display:flex; gap:8px; flex-wrap:wrap; } .lp-sw{ width:30px; height:30px; border-radius:7px; cursor:pointer; border:2px solid transparent; transition:all .12s; } .lp-sw.on{ border-color:var(--die); box-shadow:0 0 0 2px #fff inset; }
+.lp-attrs{ display:flex; flex-wrap:wrap; gap:7px; } .lp-attr{ border:1px solid var(--line); background:var(--card); border-radius:7px; padding:7px 10px; font-size:12px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; transition:all .12s; color:var(--ink); font-family:inherit; } .lp-attr.on{ background:var(--die); color:#fff; border-color:var(--die); }
+
+.lp-main{ min-width:0; display:flex; flex-direction:column; gap:16px; }
+.lp-stage{ background:var(--card); border:1px solid var(--line); border-radius:10px; }
+.lp-shead{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:12px 16px; border-bottom:1px solid var(--line); }
+.lp-crumb{ font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink2); display:flex; align-items:center; gap:6px; flex-wrap:wrap; } .lp-crumb b{ color:var(--ink); }
+.lp-vtoggle{ display:flex; } .lp-vt{ border:1px solid var(--line); background:var(--card); font-size:12px; padding:6px 11px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; color:var(--ink); font-family:inherit; } .lp-vt:first-child{ border-radius:7px 0 0 7px; } .lp-vt:last-child{ border-radius:0 7px 7px 0; } .lp-vt + .lp-vt{ border-left:none; } .lp-vt.on{ background:var(--ink); color:#fff; border-color:var(--ink); }
+.lp-preview{ padding:20px; background:#EBEEEC; border-radius:0 0 10px 10px; }
+
+.lp-tilt{ perspective:900px; } .lp-tiltinner{ transition:transform .5s cubic-bezier(.2,.7,.2,1); transform-style:preserve-3d; } .lp-tilt:hover .lp-tiltinner{ transform:rotateY(-12deg) rotateX(5deg); }
+
+.lp-hl{ transform-origin:center; animation:lp-pulse .55s ease; }
+@keyframes lp-pulse{ 0%{ opacity:0.2; } 50%{ opacity:1; } 100%{ opacity:1; } }
+
+.lp-comp{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px; }
+.lp-comph{ font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:15px; display:flex; align-items:center; gap:9px; margin-bottom:12px; flex-wrap:wrap; }
+.lp-counts{ margin-left:auto; display:flex; gap:8px; font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:0.06em; text-transform:uppercase; }
+.lp-counts em{ font-style:normal; padding:3px 8px; border-radius:4px; font-weight:600; } .lp-counts em.m{ background:rgba(14,122,74,0.1); color:var(--mand); } .lp-counts em.c{ background:rgba(183,121,31,0.12); color:var(--cond); }
+.lp-crow{ display:flex; gap:10px; align-items:flex-start; padding:9px 8px; border-bottom:1px solid var(--line2); border-radius:6px; cursor:pointer; transition:background .12s; }
+.lp-crow:last-of-type{ border-bottom:none; } .lp-crow:hover{ background:var(--line2); } .lp-crow.active{ background:rgba(229,57,155,0.07); box-shadow:inset 3px 0 0 var(--die); }
+.lp-cdot{ width:9px; height:9px; border-radius:50%; margin-top:5px; flex:none; } .lp-cbody{ min-width:0; flex:1; }
+.lp-cn{ font-size:13px; font-weight:500; } .lp-cc{ font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--ink2); margin-top:2px; } .lp-cnote{ font-size:11px; color:var(--cond); margin-top:3px; }
+.lp-cst{ font-family:'IBM Plex Mono',monospace; font-size:9px; text-transform:uppercase; letter-spacing:0.06em; padding:3px 7px; border-radius:4px; flex:none; margin-top:2px; font-weight:600; }
+.lp-honesty{ margin-top:12px; padding-top:12px; border-top:1px solid var(--line2); font-size:11px; color:var(--ink2); line-height:1.55; }
+
+.lp-audit{ background:#111418; border:1px solid #111418; border-radius:10px; padding:16px 18px; color:#E8EAED; }
+.lp-audhead{ font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:15px; display:flex; align-items:center; gap:9px; margin-bottom:12px; color:#fff; }
+.lp-obs{ display:flex; gap:12px; align-items:flex-start; padding:9px 0; border-bottom:1px solid #23272d; font-size:12.5px; line-height:1.5; color:#C7CBD1; }
+.lp-obs:last-of-type{ border-bottom:none; } .lp-obsn{ font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--cond); border:1px solid var(--cond); border-radius:4px; padding:2px 6px; flex:none; margin-top:1px; letter-spacing:0.05em; }
+.lp-audclean{ font-size:13px; color:#7ADFA6; font-family:'IBM Plex Mono',monospace; }
+.lp-audnote{ margin-top:12px; padding-top:12px; border-top:1px solid #23272d; font-size:11px; color:#8A9099; }
+
+.lp-foot{ margin-top:24px; font-size:10.5px; color:var(--ink2); text-align:center; font-family:'IBM Plex Mono',monospace; letter-spacing:0.02em; }
+
+/* palette */
+.lp-palette{ position:fixed; inset:0; background:rgba(15,20,25,0.5); backdrop-filter:blur(3px); z-index:60; display:flex; align-items:flex-start; justify-content:center; padding-top:14vh; animation:lp-fade .15s ease; }
+.lp-palbox{ width:min(560px,92vw); background:var(--card); border:1px solid var(--line); border-radius:12px; box-shadow:0 24px 60px rgba(0,0,0,0.3); overflow:hidden; }
+.lp-palin{ display:flex; align-items:center; gap:10px; padding:15px 16px; border-bottom:1px solid var(--line2); color:var(--ink2); }
+.lp-palin input{ flex:1; border:none; outline:none; font-size:16px; font-family:'IBM Plex Mono',monospace; color:var(--ink); background:transparent; }
+.lp-palin kbd, .lp-palhint kbd{ font-family:'IBM Plex Mono',monospace; font-size:10px; background:var(--line2); border:1px solid var(--line); border-radius:4px; padding:2px 5px; color:var(--ink2); }
+.lp-palmatch{ display:flex; flex-wrap:wrap; gap:7px; padding:12px 16px; border-bottom:1px solid var(--line2); }
+.lp-paltag{ background:rgba(229,57,155,0.1); color:var(--die); border:1px solid var(--die); font-family:'IBM Plex Mono',monospace; font-size:11px; border-radius:5px; padding:4px 9px; }
+.lp-palhint{ padding:12px 16px 6px; font-size:12px; color:var(--ink2); line-height:1.5; }
+.lp-palex{ padding:0 16px 14px; font-size:11.5px; color:var(--ink2); font-family:'IBM Plex Mono',monospace; } .lp-palex em{ font-style:normal; color:var(--die); }
+
+/* intro */
+.lp-introwrap{ position:fixed; inset:0; z-index:70; background:radial-gradient(1200px 600px at 50% -10%, #1b2942, #0E1420); display:flex; align-items:center; justify-content:center; padding:20px; animation:lp-fade .3s ease; }
+.lp-skip{ position:absolute; top:18px; right:20px; background:rgba(255,255,255,0.08); color:#cbd2dc; border:1px solid rgba(255,255,255,0.14); border-radius:7px; padding:7px 12px; font-size:12px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; font-family:inherit; }
+.lp-skip:hover{ background:rgba(255,255,255,0.14); }
+.lp-introcard{ width:min(940px,96vw); }
+.lp-introhead{ text-align:center; margin-bottom:14px; }
+.lp-introkick{ font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:0.35em; color:var(--die); margin-bottom:8px; }
+.lp-introttl{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:26px; color:#fff; letter-spacing:-0.01em; }
+.lp-introsub{ font-size:14px; color:#aab3c0; margin-top:6px; }
+.lp-introsvg{ background:#EBEEEC; border-radius:12px; padding:16px; box-shadow:0 30px 80px rgba(0,0,0,0.4); }
+.lp-introcta{ text-align:center; margin-top:18px; animation:lp-fade .4s ease; }
+.lp-ctatext{ font-size:14px; color:#c7cdd7; max-width:56ch; margin:0 auto 14px; line-height:1.55; }
+.lp-enter{ background:var(--die); color:#fff; border:none; border-radius:9px; padding:12px 22px; font-size:15px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:9px; font-family:inherit; box-shadow:0 8px 24px rgba(229,57,155,0.4); }
+.lp-enter:hover{ filter:brightness(1.06); }
+
+@keyframes lp-fade{ from{ opacity:0; transform:translateY(4px);} to{ opacity:1; transform:none;} }
+.v3-shell{ position:relative; background:radial-gradient(120% 100% at 50% 0%, #ffffff, #E4E9E7 70%, #D7DEDB); border-radius:0 0 10px 10px; overflow:hidden; }
+.v3-canvas{ width:100%; height:min(60vh,520px); touch-action:none; }
+.v3-controls{ position:absolute; top:12px; right:12px; display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end; max-width:72%; }
+.v3-controls button{ background:rgba(255,255,255,0.82); -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px); border:1px solid var(--line); border-radius:7px; padding:6px 10px; font-size:11.5px; cursor:pointer; color:var(--ink); font-family:inherit; display:inline-flex; align-items:center; gap:5px; transition:all .12s; }
+.v3-controls button:hover{ border-color:var(--ink); } .v3-controls button.on{ background:var(--die); color:#fff; border-color:var(--die); }
+.v3-hint{ position:absolute; bottom:12px; left:14px; font-family:'IBM Plex Mono',monospace; font-size:10.5px; letter-spacing:0.04em; color:var(--ink2); background:rgba(255,255,255,0.7); padding:4px 9px; border-radius:6px; }
+.v3-tip{ position:absolute; z-index:6; max-width:270px; background:#fff; border:1px solid var(--line); border-left:3px solid var(--die); border-radius:8px; padding:9px 11px; box-shadow:0 8px 24px rgba(22,36,59,0.14); pointer-events:none; }
+.v3-tip-h{ font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:12.5px; color:var(--ink); }
+.v3-tip-c{ font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--die); margin-top:2px; }
+.v3-tip-w{ font-size:11.5px; color:var(--ink2); margin-top:4px; line-height:1.35; }
+.v3-tip-x{ font-size:11px; color:#B23A2E; margin-top:4px; line-height:1.35; }
+.v3-fail{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; padding:30px; color:var(--ink2); font-size:13px; }
+@media (prefers-reduced-motion: reduce){ .lp-root *, .lp-introwrap *, .lp-palette *{ animation:none !important; transition:none !important; } }
+`;
+
+/* ==================================================================== */
+/* ============  UNIFIED ADDITIONS: multi-class 3D studio  ============ */
+/* ==================================================================== */
+
+const CLASSES3 = [
+  { id: "cosmetic", label: "Cosmetic", Icon: Sparkles },
+  { id: "pharma", label: "Pharma", Icon: Pill },
+  { id: "device", label: "Device", Icon: Stethoscope },
+  { id: "fmcg", label: "FMCG", Icon: ShoppingBag },
+];
+const FLUIDS = [
+  { id: "clear", name: "Clear", hex: "#D8E8EE", fdc: false },
+  { id: "amber", name: "Amber syrup", hex: "#A05617", fdc: false },
+  { id: "cola", name: "Caramel (cola)", hex: "#3A2213", fdc: false },
+  { id: "red40", name: "FD&C Red 40", hex: "#C1122E", fdc: true },
+  { id: "red3", name: "FD&C Red 3", hex: "#DB3A63", fdc: true },
+  { id: "yellow5", name: "FD&C Yellow 5", hex: "#EFC81E", fdc: true },
+  { id: "yellow6", name: "FD&C Yellow 6", hex: "#EE8A1E", fdc: true },
+  { id: "green3", name: "FD&C Green 3", hex: "#149E77", fdc: true },
+  { id: "blue1", name: "FD&C Blue 1", hex: "#1276BC", fdc: true },
+  { id: "blue2", name: "FD&C Blue 2", hex: "#39397F", fdc: true },
+];
+const LABEL_BG = [
+  { id: "white", hex: "#FBFAF7", ink: "#1C2634" }, { id: "cream", hex: "#F2EAD8", ink: "#3A3222" },
+  { id: "kraft", hex: "#C8A97E", ink: "#3A2C18" }, { id: "mint", hex: "#DCEBE2", ink: "#1E3A2C" },
+  { id: "blush", hex: "#F3DEE0", ink: "#4A2730" }, { id: "sky", hex: "#DCE7F2", ink: "#1E2E44" },
+  { id: "charcoal", hex: "#242A31", ink: "#EDEFF2" }, { id: "black", hex: "#131518", ink: "#F0F1F3" },
+];
+const PATTERNS = [
+  { id: "none", label: "None" }, { id: "dots", label: "Dots" }, { id: "vlines", label: "Lines" },
+  { id: "diagonal", label: "Diagonal" }, { id: "waves", label: "Waves" }, { id: "frame", label: "Frame" },
+];
+const STYLES = [
+  { id: "minimal", label: "Minimal" }, { id: "classic", label: "Classic" },
+  { id: "bold", label: "Bold" }, { id: "boxed", label: "Boxed" },
+];
+const CLASS_DEFAULTS = {
+  cosmetic: { brand: "Aurelia", name: "Radiance", descriptor: "Rich moisturising cream", net: "50 ml",
+    back: "Aqua, Glycerin, Cetearyl Alcohol, Butyrospermum Parkii Butter, Tocopheryl Acetate, Phenoxyethanol. For external use only. Avoid contact with eyes.",
+    responsible: "Aurelia (Responsible Person), Paris, FR", heading: "Ingredients", container: "jar" },
+  pharma: { brand: "Medico", name: "Paracetamol", descriptor: "500 mg / 5 ml oral suspension", net: "100 ml",
+    back: "Each 5 ml contains Paracetamol 500 mg. Dose as directed by a physician. Shake well before use. Store below 25 C. Keep out of reach of children.",
+    responsible: "Mfd by Medico Pharma Ltd. Mfg Lic. No. 25B/____", heading: "Composition & directions", container: "syrupbottle" },
+  device: { brand: "Cathline", name: "Guide Catheter", descriptor: "Single-use sterile device", net: "1 unit",
+    back: "Sterile unless the package is opened or damaged. Single use only. Do not reuse. Do not resterilise. See instructions for use.",
+    responsible: "Cathline Medical, Boston, MA. EC REP Amsterdam, NL", heading: "Instructions for use", container: "syringe" },
+  fmcg: { brand: "Fizzco", name: "Cola", descriptor: "Carbonated soft drink", net: "330 ml",
+    back: "Carbonated water, sugar, caramel colour (150d), phosphoric acid, natural flavours, caffeine. Contains no fruit.",
+    responsible: "Fizzco Beverages Pvt Ltd. FSSAI Lic. No. ____", heading: "Ingredients", container: "soda" },
+};
+const stc = (n, c, s, note) => ({ n, c, s, note });
+const COMPLIANCE = {
+  pharma: {
+    US: [stc("Proprietary + established name", "21 CFR 201.10", "mandatory"), stc("Active & strength", "21 CFR 201.100", "mandatory"), stc("Net quantity", "21 CFR 201.51", "mandatory"), stc("NDC number", "21 CFR 207.35", "mandatory"), stc("Lot & expiry", "21 CFR 211.130/.137", "mandatory"), stc("Storage statement", "USP <659>", "mandatory"), stc("Rx-only legend (if Rx)", "21 CFR 201.57", "conditional", "Applies to prescription products.")],
+    EU: [stc("Name, strength, form", "Dir 2001/83 Art. 54(a)", "mandatory"), stc("Active substance", "Art. 54(b)", "mandatory"), stc("Keep out of reach of children", "Art. 54(e)", "mandatory"), stc("Expiry & batch", "Art. 54(f)(k)", "mandatory"), stc("MA number & holder", "Art. 54(l)", "mandatory"), stc("Braille (name)", "Art. 56a", "mandatory"), stc("Safety features (2D + ATD)", "Del. Reg 2016/161", "mandatory")],
+    IN: [stc("Generic name prominent", "D&C Rules r.96", "mandatory"), stc("Manufacturing licence no.", "D&C Rules r.96", "mandatory"), stc("Batch, mfg & expiry", "D&C Rules r.96", "mandatory"), stc("Maximum Retail Price", "Legal Metrology 2011", "mandatory"), stc("Schedule warning (if applicable)", "D&C Schedule H", "conditional", "Depends on the drug schedule.")],
+  },
+  device: {
+    US: [stc("Device name", "21 CFR 801.1", "mandatory"), stc("Manufacturer", "21 CFR 801.1", "mandatory"), stc("Intended use", "21 CFR 801.4", "mandatory"), stc("UDI (DI + PI, AIDC)", "21 CFR Part 830", "mandatory"), stc("Rx-device statement", "21 CFR 801.109", "conditional", "For prescription devices."), stc("Lot / serial", "21 CFR 830.20", "mandatory")],
+    EU: [stc("Device name", "MDR Annex I 23.2(a)", "mandatory"), stc("Manufacturer + SRN", "MDR 23.2(c)", "mandatory"), stc("EC REP (if non-EU)", "MDR Art. 11", "mandatory"), stc("CE + Notified Body", "MDR Art. 20", "mandatory"), stc("Basic UDI-DI + carrier", "MDR Art. 27", "mandatory"), stc("Sterile / single-use symbols", "ISO 15223-1", "conditional", "As applicable to the device.")],
+    IN: [stc("Device name", "MD Rules 2017", "mandatory"), stc("Manufacturer / importer + licence", "MD Rules 2017", "mandatory"), stc("Batch, mfg & use-before", "MD Rules 2017", "mandatory"), stc("Net quantity", "Legal Metrology 2011", "mandatory"), stc("UDI (phased)", "CDSCO UDI", "conditional", "Confirm current applicability.")],
+  },
+  fmcg: {
+    US: [stc("Statement of identity", "21 CFR 101.3", "mandatory"), stc("Net quantity on PDP", "21 CFR 101.7", "mandatory"), stc("Nutrition Facts", "21 CFR 101.9", "mandatory"), stc("Ingredient list", "21 CFR 101.4", "mandatory"), stc("Major allergen declaration (9)", "FALCPA / FASTER Act", "mandatory"), stc("Manufacturer", "21 CFR 101.5", "mandatory")],
+    EU: [stc("Name of the food", "Reg 1169/2011 Art. 17", "mandatory"), stc("Ingredient list", "Art. 18", "mandatory"), stc("Allergen emphasis (14)", "Art. 21", "mandatory"), stc("Net quantity", "Art. 23", "mandatory"), stc("Best before / use by", "Art. 24", "mandatory"), stc("Nutrition declaration", "Art. 30", "mandatory")],
+    IN: [stc("Name of food", "FSS L&D 2020", "mandatory"), stc("Ingredient list", "FSS L&D 2020", "mandatory"), stc("Nutrition information", "FSS L&D 2020", "mandatory"), stc("Veg / non-veg logo", "FSS L&D 2020", "mandatory"), stc("FSSAI licence + logo", "FSS L&D 2020", "mandatory"), stc("Net quantity + MRP", "Legal Metrology 2011", "mandatory")],
+  },
+};
+
+/* ============================= */
+/* ENHANCED CONTAINER LIBRARY    */
+/* ============================= */
+
+/* 
+ * Container part types:
+ *   lathe  - revolved profile for bottles, vials, ampoules
+ *   cyl    - cylinder for caps, stoppers, plungers  
+ *   box    - flat rectangular panels
+ *   sph    - sphere/ellipsoid for domes, pouches
+ *   disk   - flat cylinder for flanges, bases
+ *   blister - procedurally generated dome array
+ *   torus  - ring shapes for neck rings, gaskets
+ * 
+ * Material types (enhanced):
+ *   glass        - realistic glass with transmission
+ *   clear        - transparent plastic/water
+ *   amberglass   - amber pharmaceutical glass
+ *   plastic      - HDPE/natural plastic
+ *   whiteplastic - opaque white plastic
+ *   metal        - brushed aluminium
+ *   foil         - metallic laminate
+ *   rubber       - bromobutyl stopper
+ *   grey         - plunger rubber
+ *   white        - PTFE/plunger tip
+ *   accent       - colored cap (uses accentHex)
+ */
+
+const CONTLIB = {
+  jar: { label: "Jar", cls: ["cosmetic"],
+    parts: [
+      { k: "lathe", pts: [[0,0],[1.02,0],[1.08,0.05],[1.1,0.1],[1.1,0.94],[1.06,1.02],[0.98,1.06],[0,1.07]], mat: "whiteplastic", seg: 72 },
+      { k: "cyl", rt: 1.18, rb: 1.16, h: 0.34, y: 1.26, mat: "accent", seg: 72 },
+      { k: "torus", rt: 1.17, r: 0.03, y: 1.43, mat: "accent", seg: 72 },
+      { k: "lathe", pts: [[0,1.43],[1.1,1.43],[1.14,1.41],[1.12,1.39],[0,1.38]], mat: "accent", seg: 72 },
+    ],
+    band: { y: 0.42, h: 0.72, r: 1.1, arc: 150 } },
+
+  tube: { label: "Tube", cls: ["cosmetic"],
+    parts: [
+      { k: "box", w: 1.2, h: 0.16, d: 0.12, y: 0.05, mat: "whiteplastic" },
+      { k: "box", w: 1.2, h: 0.03, d: 0.13, y: 0.12, mat: "grey" },
+      { k: "box", w: 1.2, h: 0.03, d: 0.13, y: 0.02, mat: "grey" },
+      { k: "lathe", pts: [[0,0.14],[0.58,0.16],[0.6,0.4],[0.6,1.6],[0.5,1.8],[0.32,2.0],[0.2,2.12],[0.2,2.2],[0,2.2]], mat: "whiteplastic", seg: 72 },
+      { k: "cyl", rt: 0.24, rb: 0.24, h: 0.42, y: 2.38, mat: "accent", seg: 40 },
+      { k: "lathe", pts: [[0,2.59],[0.22,2.59],[0.24,2.57],[0.22,2.55],[0,2.55]], mat: "accent", seg: 40 },
+    ],
+    band: { y: 0.78, h: 1.05, r: 0.6, arc: 150 } },
+
+  dropper: { label: "Dropper", cls: ["cosmetic"], fluid: { r: 0.5, y: 0.72, h: 1.2 }, fluidDefault: "clear",
+    parts: [
+      { k: "lathe", pts: [[0,0],[0.6,0],[0.62,0.06],[0.62,1.28],[0.5,1.5],[0.34,1.7],[0.3,1.82],[0.3,1.9],[0,1.9]], mat: "glass", seg: 72 },
+      { k: "torus", rt: 0.63, r: 0.02, y: 0.06, mat: "glass", seg: 48 },
+      { k: "cyl", rt: 0.4, rb: 0.4, h: 0.28, y: 2.05, mat: "accent", seg: 40 },
+      { k: "torus", rt: 0.4, r: 0.03, y: 2.02, mat: "accent", seg: 40 },
+      { k: "torus", rt: 0.4, r: 0.03, y: 2.12, mat: "accent", seg: 40 },
+      { k: "cyl", rt: 0.11, rb: 0.07, h: 1.35, y: 1.15, mat: "clear", seg: 28 },
+      { k: "sph", r: 0.3, sx: 1, sy: 1.3, sz: 1, y: 2.5, mat: "rubber", seg: 40 },
+    ],
+    band: { y: 0.5, h: 0.82, r: 0.62, arc: 150 } },
+
+  airless: { label: "Airless pump", cls: ["cosmetic"],
+    parts: [
+      { k: "lathe", pts: [[0,0],[0.64,0],[0.66,0.08],[0.66,2.16],[0.64,2.26],[0,2.28]], mat: "whiteplastic", seg: 72 },
+      { k: "torus", rt: 0.66, r: 0.02, y: 0.08, mat: "whiteplastic", seg: 48 },
+      { k: "cyl", rt: 0.5, rb: 0.52, h: 0.18, y: 2.4, mat: "accent", seg: 48 },
+      { k: "lathe", pts: [[0,2.5],[0.44,2.5],[0.48,2.62],[0.46,2.82],[0.32,2.92],[0,2.94]], mat: "accent", seg: 48 },
+    ],
+    band: { y: 0.85, h: 1.35, r: 0.66, arc: 150 } },
+
+  mist: { label: "Mist bottle", cls: ["cosmetic"], fluid: { r: 0.42, y: 0.85, h: 1.35 }, fluidDefault: "clear",
+    parts: [
+      { k: "lathe", pts: [[0,0],[0.5,0],[0.52,0.06],[0.52,1.72],[0.46,1.9],[0.36,2.02],[0.34,2.1],[0,2.1]], mat: "clear", seg: 72 },
+      { k: "cyl", rt: 0.4, rb: 0.42, h: 0.22, y: 2.22, mat: "accent", seg: 48 },
+      { k: "cyl", rt: 0.2, rb: 0.22, h: 0.2, y: 2.44, mat: "white", seg: 32 },
+      { k: "box", w: 0.34, h: 0.16, d: 0.34, y: 2.6, mat: "white" },
+      { k: "cyl", rt: 0.05, rb: 0.06, h: 0.12, y: 2.72, mat: "accent", seg: 16 },
+    ],
+    band: { y: 0.68, h: 1.15, r: 0.52, arc: 150 } },
+
+  pillbottle: { label: "Pill bottle", cls: ["pharma"],
+    parts: [
+      { k: "lathe", pts: [[0,0.02],[0.5,0],[0.72,0.05],[0.74,0.12],[0.74,1.6],[0.7,1.74],[0.62,1.88],[0,1.9]], mat: "amberglass", seg: 72 },
+      { k: "cyl", rt: 0.8, rb: 0.8, h: 0.5, y: 2.16, mat: "whiteplastic", seg: 40 },
+      { k: "torus", rt: 0.79, r: 0.03, y: 2.4, mat: "whiteplastic", seg: 40 },
+      { k: "lathe", pts: [[0,2.4],[0.74,2.4],[0.78,2.38],[0.76,2.36],[0,2.35]], mat: "whiteplastic", seg: 40 },
+    ],
+    band: { y: 0.82, h: 1.15, r: 0.74, arc: 155 } },
+
+  syrupbottle: { label: "Syrup bottle", cls: ["pharma"], fluid: { r: 0.62, y: 0.9, h: 1.4 }, fluidDefault: "amber",
+    parts: [
+      { k: "lathe", pts: [[0,0],[0.76,0],[0.78,0.08],[0.78,1.55],[0.66,1.85],[0.42,2.2],[0.36,2.45],[0.36,2.55],[0,2.55]], mat: "amberglass", seg: 72 },
+      { k: "torus", rt: 0.78, r: 0.02, y: 0.08, mat: "amberglass", seg: 48 },
+      { k: "cyl", rt: 0.46, rb: 0.46, h: 0.4, y: 2.74, mat: "whiteplastic", seg: 40 },
+      { k: "torus", rt: 0.46, r: 0.02, y: 2.92, mat: "whiteplastic", seg: 40 },
+    ],
+    band: { y: 0.82, h: 1.05, r: 0.78, arc: 150 } },
+
+  vial: { label: "Vial", cls: ["pharma", "device"], fluid: { r: 0.42, y: 0.55, h: 0.82 }, fluidDefault: "clear",
+    parts: [
+      { k: "lathe", pts: [[0,0],[0.5,0],[0.52,0.06],[0.52,1.02],[0.42,1.2],[0.32,1.34],[0.3,1.42],[0,1.44]], mat: "glass", seg: 72 },
+      { k: "cyl", rt: 0.36, rb: 0.34, h: 0.14, y: 1.51, mat: "metal", seg: 40 },
+      { k: "torus", rt: 0.35, r: 0.03, y: 1.44, mat: "metal", seg: 40 },
+      { k: "cyl", rt: 0.29, rb: 0.29, h: 0.1, y: 1.62, mat: "grey", seg: 40 },
+    ],
+    band: { y: 0.5, h: 0.7, r: 0.52, arc: 155 } },
+
+  vaccine: { label: "Vaccine vial", cls: ["pharma"], fluid: { r: 0.38, y: 0.48, h: 0.66 }, fluidDefault: "clear",
+    parts: [
+      { k: "lathe", pts: [[0,0],[0.46,0],[0.48,0.06],[0.48,0.9],[0.38,1.06],[0.28,1.2],[0.26,1.28],[0,1.3]], mat: "glass", seg: 72 },
+      { k: "cyl", rt: 0.32, rb: 0.3, h: 0.12, y: 1.37, mat: "metal", seg: 40 },
+      { k: "torus", rt: 0.31, r: 0.03, y: 1.3, mat: "metal", seg: 40 },
+      { k: "cyl", rt: 0.3, rb: 0.3, h: 0.14, y: 1.5, mat: "accent", seg: 40 },
+      { k: "lathe", pts: [[0,1.57],[0.16,1.57],[0.2,1.62],[0.16,1.66],[0,1.67]], mat: "accent", seg: 40 },
+    ],
+    band: { y: 0.46, h: 0.6, r: 0.48, arc: 155 } },
+
+  ampoule: { label: "Ampoule", cls: ["pharma"], fluid: { r: 0.32, y: 0.35, h: 0.55 }, fluidDefault: "clear",
+    parts: [
+      { k: "lathe", pts: [[0,0],[0.16,0],[0.32,0.05],[0.36,0.24],[0.36,0.82],[0.3,0.98],[0.16,1.14],[0.14,1.3],[0.2,1.46],[0.17,1.62],[0.13,1.9],[0.15,2.06],[0.1,2.24],[0.05,2.36],[0,2.4]], mat: "glass", seg: 72 },
+      { k: "disk", r: 0.16, h: 0.05, y: 1.36, mat: "accent", seg: 40 },
+    ],
+    band: { y: 0.34, h: 0.5, r: 0.36, arc: 150 } },
+
+  syringe: { label: "Prefilled syringe", cls: ["pharma", "device"], fluid: { r: 0.26, y: 1.0, h: 0.95 }, fluidDefault: "clear",
+    parts: [
+      { k: "cyl", rt: 0.28, rb: 0.28, h: 1.45, y: 1.22, mat: "glass", seg: 48 },
+      { k: "torus", rt: 0.28, r: 0.02, y: 1.94, mat: "glass", seg: 40 },
+      { k: "box", w: 0.86, h: 0.07, d: 0.24, y: 1.98, mat: "clear" },
+      { k: "lathe", pts: [[0,0.5],[0.16,0.5],[0.12,0.34],[0.08,0.2],[0.05,0.1],[0,0.08]], mat: "glass", seg: 32 },
+      { k: "cyl", rt: 0.018, rb: 0.018, h: 0.55, y: 0.02, mat: "grey", seg: 12 },
+      { k: "cyl", rt: 0.075, rb: 0.075, h: 0.55, y: 0.28, mat: "accent", seg: 20 },
+      { k: "box", w: 0.07, h: 0.72, d: 0.16, y: 2.38, mat: "clear" },
+      { k: "box", w: 0.16, h: 0.72, d: 0.07, y: 2.38, mat: "clear" },
+      { k: "disk", r: 0.26, h: 0.07, y: 2.76, mat: "accent", seg: 40 },
+    ],
+    band: { y: 1.15, h: 0.85, r: 0.28, arc: 150 } },
+
+  dualsyringe: { label: "Dual-chamber syringe", cls: ["pharma"], fluid: { r: 0.28, y: 0.92, h: 0.6 }, fluidDefault: "clear",
+    parts: [
+      { k: "cyl", rt: 0.3, rb: 0.3, h: 1.7, y: 1.32, mat: "glass", seg: 48 },
+      { k: "cyl", rt: 0.28, rb: 0.28, h: 0.6, y: 1.68, mat: "white", seg: 40 },
+      { k: "disk", r: 0.28, h: 0.08, y: 1.34, mat: "grey", seg: 40 },
+      { k: "torus", rt: 0.3, r: 0.02, y: 2.15, mat: "glass", seg: 40 },
+      { k: "box", w: 0.9, h: 0.07, d: 0.26, y: 2.2, mat: "clear" },
+      { k: "lathe", pts: [[0,0.52],[0.17,0.52],[0.12,0.34],[0.07,0.16],[0,0.1]], mat: "glass", seg: 32 },
+      { k: "cyl", rt: 0.018, rb: 0.018, h: 0.5, y: 0.02, mat: "grey", seg: 12 },
+      { k: "box", w: 0.07, h: 0.75, d: 0.17, y: 2.6, mat: "clear" },
+      { k: "box", w: 0.17, h: 0.75, d: 0.07, y: 2.6, mat: "clear" },
+      { k: "disk", r: 0.28, h: 0.07, y: 3.0, mat: "accent", seg: 40 },
+    ],
+    band: { y: 0.9, h: 0.6, r: 0.3, arc: 150 } },
+
+  blister: { label: "Blister pack", cls: ["pharma"], flat: true,
+    parts: [
+      { k: "pack", w: 2.2, h: 3.0, d: 0.16, r: 0.16, bevel: 0.05, mat: "foil", y: 1.5 },
+      { k: "blister", rows: 5, cols: 2, w: 1.7, h: 2.7, y: 1.5, pr: 0.34, ovx: 0.68, ovy: 1.3 },
+    ],
+    face: { w: 1.9, h: 0.42, y: 2.74, z: -0.12 } },
+
+  soda: { label: "Soda bottle", cls: ["fmcg"], fluid: { r: 0.78, y: 0.92, h: 1.5 }, fluidDefault: "cola",
+    parts: [
+      { k: "lathe", pts: [[0,0.24],[0.26,0.06],[0.46,0],[0.64,0.02],[0.8,0.12],[0.88,0.28],[0.9,0.52],[0.84,0.74],[0.8,0.92],[0.86,1.16],[0.9,1.46],[0.9,1.82],[0.82,2.1],[0.5,2.52],[0.42,2.78],[0.42,2.88],[0,2.9]], mat: "clear", seg: 84 },
+      { k: "torus", rt: 0.44, r: 0.05, y: 2.9, mat: "clear", seg: 56 },
+      { k: "lathe", pts: [[0,2.92],[0.42,2.92],[0.43,3.22],[0,3.24]], mat: "clear", seg: 64 },
+      { k: "torus", rt: 0.43, r: 0.02, y: 3.0, mat: "clear", seg: 44 },
+      { k: "torus", rt: 0.43, r: 0.02, y: 3.09, mat: "clear", seg: 44 },
+      { k: "cyl", rt: 0.44, rb: 0.46, h: 0.3, y: 3.26, mat: "accent", seg: 48 },
+      { k: "torus", rt: 0.45, r: 0.02, y: 3.41, mat: "accent", seg: 48 },
+    ],
+    band: { y: 0.95, h: 1.0, r: 0.9, arc: 155 } },
+
+  can: { label: "Can", cls: ["fmcg"],
+    parts: [
+      { k: "lathe", pts: [[0,0.3],[0.34,0.12],[0.55,0.02],[0.72,0.02],[0.83,0.12],[0.85,0.26],[0.85,2.12],[0.74,2.3],[0.6,2.4],[0,2.41]], mat: "metal", seg: 84 },
+      { k: "torus", rt: 0.78, r: 0.05, y: 0.16, mat: "metal", seg: 56 },
+      { k: "torus", rt: 0.6, r: 0.05, y: 2.4, mat: "metal", seg: 56 },
+      { k: "lathe", pts: [[0,2.44],[0.5,2.44],[0.56,2.47],[0.5,2.5],[0,2.5]], mat: "metal", seg: 72 },
+      { k: "box", w: 0.5, h: 0.03, d: 0.2, y: 2.53, mat: "grey" },
+      { k: "cyl", rt: 0.05, rb: 0.05, h: 0.04, y: 2.54, mat: "grey", seg: 20 },
+    ],
+    band: { y: 1.1, h: 1.75, r: 0.85, arc: 158 } },
+
+  chips: { label: "Chip packet", cls: ["fmcg"], flat: true,
+    parts: [
+      { k: "pack", w: 2.0, h: 2.5, d: 0.75, r: 0.22, bevel: 0.34, mat: "foil", y: 1.5 },
+      { k: "box", w: 2.08, h: 0.2, d: 0.12, y: 2.7, mat: "grey" },
+      { k: "box", w: 2.08, h: 0.2, d: 0.12, y: 0.3, mat: "grey" },
+      { k: "box", w: 0.12, h: 2.2, d: 0.06, y: 1.5, z: -0.42, mat: "grey" },
+    ],
+    face: { w: 1.55, h: 1.9, y: 1.5, z: 0.5 } },
+
+  pouch: { label: "Stand-up pouch", cls: ["fmcg", "cosmetic"], flat: true,
+    parts: [
+      { k: "pack", w: 1.7, h: 2.5, d: 0.5, r: 0.16, bevel: 0.16, mat: "foil", y: 1.45 },
+      { k: "box", w: 1.72, h: 0.16, d: 0.5, y: 2.62, mat: "grey" },
+      { k: "sph", r: 0.85, sx: 1, sy: 0.28, sz: 0.42, y: 0.35, mat: "foil", seg: 48 },
+    ],
+    face: { w: 1.5, h: 2.0, y: 1.5, z: 0.33 } },
+
+  sachet: { label: "Sachet", cls: ["cosmetic", "pharma", "fmcg"], flat: true,
+    parts: [
+      { k: "pack", w: 1.5, h: 2.2, d: 0.08, r: 0.06, bevel: 0.02, mat: "foil", y: 1.1 },
+      { k: "pack", w: 1.02, h: 1.62, d: 0.28, r: 0.12, bevel: 0.12, mat: "foil", y: 1.1 },
+      { k: "box", w: 1.5, h: 0.16, d: 0.1, y: 2.12, mat: "grey" },
+      { k: "box", w: 1.5, h: 0.16, d: 0.1, y: 0.08, mat: "grey" },
+      { k: "box", w: 0.16, h: 2.2, d: 0.1, x: -0.67, y: 1.1, mat: "grey" },
+      { k: "box", w: 0.16, h: 2.2, d: 0.1, x: 0.67, y: 1.1, mat: "grey" },
+      { k: "box", w: 0.1, h: 0.1, d: 0.12, x: 0.72, y: 1.45, mat: "grey" },
+    ],
+    face: { w: 0.9, h: 1.42, y: 1.1, z: 0.17 } },
+
+  carton: { label: "Carton", cls: ["cosmetic", "pharma", "fmcg"], flat: true,
+    parts: [
+      { k: "box", w: 1.5, h: 2.6, d: 0.9, y: 1.3, mat: "whiteplastic" },
+      { k: "box", w: 1.44, h: 0.02, d: 0.02, y: 2.6, z: 0.45, mat: "grey" },
+      { k: "box", w: 0.02, h: 2.54, d: 0.02, x: -0.75, y: 1.3, z: 0.45, mat: "grey" },
+    ],
+    face: { w: 1.34, h: 2.4, y: 1.3, z: 0.46 } },
+};
+
+/* ---- canvas label art ---- */
+function hx2rgba(hex, a) { const h = hex.replace("#", ""); const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; }
+function cwrap(ctx, text, maxW) { const words = (text || "").split(" "); const lines = []; let cur = ""; words.forEach((w) => { const t = (cur + " " + w).trim(); if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; } else cur = t; }); if (cur) lines.push(cur); return lines; }
+function fitFont(ctx, text, maxW, start, weight, family, min) { let px = start; while (px > (min || 20)) { ctx.font = `${weight} ${px}px ${family}`; if (ctx.measureText(text).width <= maxW) break; px -= 2; } return px; }
+function ellip(ctx, text, maxW) { if (ctx.measureText(text).width <= maxW) return text; let t = text; while (t.length > 1 && ctx.measureText(t + "…").width > maxW) t = t.slice(0, -1); return t + "…"; }
+const CD = "'Space Grotesk', system-ui, sans-serif", CS = "'IBM Plex Sans', system-ui, sans-serif", CM = "'IBM Plex Mono', ui-monospace, monospace", CSF = "Georgia, 'Times New Roman', serif";
+function drawPat(ctx, w, h, o) {
+  ctx.save(); const ink = hx2rgba(o.ink, 0.07);
+  if (o.pattern === "dots") { ctx.fillStyle = ink; for (let y = 22; y < h; y += 30) for (let x = 22; x < w; x += 30) { ctx.beginPath(); ctx.arc(x, y, 2.4, 0, 7); ctx.fill(); } }
+  else if (o.pattern === "vlines") { ctx.strokeStyle = ink; ctx.lineWidth = 1.4; for (let x = 16; x < w; x += 22) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); } }
+  else if (o.pattern === "diagonal") { ctx.strokeStyle = ink; ctx.lineWidth = 1.4; for (let x = -h; x < w; x += 26) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + h, h); ctx.stroke(); } }
+  else if (o.pattern === "waves") { ctx.strokeStyle = ink; ctx.lineWidth = 1.6; for (let y = 24; y < h; y += 34) { ctx.beginPath(); for (let x = 0; x <= w; x += 8) ctx.lineTo(x, y + Math.sin(x / 26) * 7); ctx.stroke(); } }
+  ctx.restore();
+}
+function frameInset(ctx, w, h, o) {
+  let inset = w * 0.08;
+  if (o.pattern === "frame" || o.style === "classic" || o.style === "boxed") {
+    const m = w * (o.style === "boxed" ? 0.05 : 0.06);
+    ctx.save(); ctx.strokeStyle = (o.style === "boxed") ? o.accent : hx2rgba(o.ink, 0.5); ctx.lineWidth = (o.style === "boxed") ? w * 0.018 : 2;
+    ctx.strokeRect(m, m, w - 2 * m, h - 2 * m);
+    if (o.style === "classic") { ctx.lineWidth = 1; ctx.strokeRect(m + 8, m + 8, w - 2 * m - 16, h - 2 * m - 16); }
+    ctx.restore(); inset = m + (o.style === "boxed" ? w * 0.05 : 22);
+  }
+  return [inset, inset, w - 2 * inset, h - 2 * inset];
+}
+function drawFront3(cv, o) {
+  const ctx = cv.getContext("2d"); const w = cv.width, h = cv.height;
+  ctx.clearRect(0, 0, w, h); ctx.fillStyle = o.bg; ctx.fillRect(0, 0, w, h); drawPat(ctx, w, h, o);
+  const [sx, sy, sw, sh] = frameInset(ctx, w, h, o);
+  ctx.save(); ctx.beginPath(); ctx.rect(sx, sy, sw, sh); ctx.clip();
+  const serif = o.style === "classic", bold = o.style === "bold";
+  const cxp = bold ? sx : sx + sw / 2; ctx.textAlign = bold ? "left" : "center"; const disp = serif ? CSF : CD;
+  ctx.fillStyle = hx2rgba(o.ink, 0.62); ctx.font = `${serif ? "" : "600 "}${Math.round(sh * 0.05)}px ${serif ? CSF : CM}`;
+  ctx.fillText(ellip(ctx, (o.brand || "").toUpperCase(), sw), cxp, sy + sh * 0.16);
+  ctx.fillStyle = o.ink; const np = fitFont(ctx, o.name || "", sw, Math.round(sh * 0.17), "700", disp, 22); ctx.font = `700 ${np}px ${disp}`;
+  ctx.fillText(o.name || "", cxp, sy + sh * 0.42);
+  ctx.strokeStyle = o.accent; ctx.lineWidth = 3; ctx.beginPath();
+  if (bold) { ctx.moveTo(sx, sy + sh * 0.5); ctx.lineTo(sx + sw * 0.4, sy + sh * 0.5); } else { ctx.moveTo(cxp - sw * 0.13, sy + sh * 0.5); ctx.lineTo(cxp + sw * 0.13, sy + sh * 0.5); }
+  ctx.stroke();
+  ctx.fillStyle = hx2rgba(o.ink, 0.72); ctx.font = `${serif ? "italic " : ""}${Math.round(sh * 0.04)}px ${serif ? CSF : CS}`;
+  cwrap(ctx, o.descriptor || "", sw).slice(0, 2).forEach((l, i) => ctx.fillText(l, cxp, sy + sh * 0.6 + i * sh * 0.055));
+  ctx.fillStyle = o.ink; ctx.font = `600 ${Math.round(sh * 0.06)}px ${disp}`; ctx.fillText(ellip(ctx, o.net || "", sw), cxp, sy + sh * 0.9);
+  ctx.restore();
+}
+function drawBack3(cv, o) {
+  const ctx = cv.getContext("2d"); const w = cv.width, h = cv.height;
+  ctx.clearRect(0, 0, w, h); ctx.fillStyle = o.bg; ctx.fillRect(0, 0, w, h); drawPat(ctx, w, h, o);
+  const [sx, sy, sw, sh] = frameInset(ctx, w, h, o);
+  ctx.save(); ctx.beginPath(); ctx.rect(sx, sy, sw, sh); ctx.clip();
+  ctx.textAlign = "left"; let y = sy + sh * 0.08;
+  ctx.fillStyle = o.accent; ctx.font = `600 ${Math.round(sh * 0.05)}px ${CM}`; ctx.fillText(ellip(ctx, (o.heading || "").toUpperCase(), sw), sx, y); y += sh * 0.035;
+  ctx.strokeStyle = hx2rgba(o.ink, 0.3); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(sx, y); ctx.lineTo(sx + sw, y); ctx.stroke(); y += sh * 0.05;
+  ctx.fillStyle = hx2rgba(o.ink, 0.85); ctx.font = `${Math.round(sh * 0.04)}px ${CS}`; const lh = sh * 0.052;
+  const dataY = sy + sh * 0.66;
+  const bl = cwrap(ctx, o.back || "", sw); for (let i = 0; i < bl.length && y + lh < dataY; i++) { ctx.fillText(bl[i], sx, y); y += lh; }
+  let dy = dataY; ctx.font = `${Math.round(sh * 0.04)}px ${CM}`; ctx.fillStyle = o.ink;
+  ctx.fillText(`Batch ${o.batch || ""}`, sx, dy); dy += sh * 0.055;
+  ctx.fillText(`MFG ${o.mfg || ""}`, sx, dy); ctx.fillText(`EXP ${o.exp || ""}`, sx + sw * 0.5, dy); dy += sh * 0.06;
+  ctx.fillStyle = hx2rgba(o.ink, 0.75); ctx.font = `${Math.round(sh * 0.036)}px ${CS}`;
+  cwrap(ctx, o.responsible || "", sw * 0.54).slice(0, 3).forEach((l) => { ctx.fillText(l, sx, dy); dy += sh * 0.044; });
+
+  /* data carrier drawn on the artwork, consistent with the Data carrier grade */
+  const seed = ((o.brand || "") + (o.name || "") + (o.batch || "")).replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  let hh = 5381; for (let i = 0; i < seed.length; i++) hh = ((hh * 33) ^ seed.charCodeAt(i)) >>> 0;
+  let d12 = "", x = hh || 12345678; for (let i = 0; i < 12; i++) { d12 += (x % 10); x = Math.floor(x / 10) + (i + 3) * 7 + seed.length + 1; }
+  d12 = (d12 + "000000000000").slice(0, 12);
+  const g13 = d12 + ean13Check(d12);
+  const bits = ean13Bits(g13);
+  const bcW = sw * 0.40, bcH = sh * 0.12, bx = sx + sw - bcW, by = sy + sh * 0.80;
+  const bw = bcW / bits.length;
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(bx - bw * 6, by - sh * 0.015, bcW + bw * 10, bcH + sh * 0.06);
+  ctx.fillStyle = "#141414";
+  for (let i = 0; i < bits.length; i++) if (bits[i] === "1") ctx.fillRect(bx + i * bw, by, Math.ceil(bw), bcH);
+  ctx.textAlign = "center"; ctx.font = `${Math.round(sh * 0.03)}px ${CM}`; ctx.fillStyle = "#141414";
+  ctx.fillText(g13, bx + bcW / 2, by + bcH + sh * 0.032); ctx.textAlign = "left";
+  if (o.cls === "pharma" || o.cls === "device") {
+    const n = 12, grid = matrixGrid(g13 + (o.batch || ""), n), ms = sh * 0.15, cell = ms / n;
+    const mx = bx - ms - sw * 0.05, my = by - sh * 0.005;
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(mx - cell, my - cell, ms + cell * 2, ms + cell * 2);
+    ctx.fillStyle = "#141414";
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (grid[r][c]) ctx.fillRect(mx + c * cell, my + r * cell, Math.ceil(cell), Math.ceil(cell));
+  }
+  ctx.restore();
+}
+
+/* ============================= */
+/* ENHANCED MATERIAL SYSTEM      */
+/* ============================= */
+
+function makeMat(T, name, accentHex) {
+  switch (name) {
+    /* Glass - realistic transmission for pharmaceutical containers */
+    case "glass": {
+      const m = new T.MeshPhysicalMaterial({
+        color: 0xdfeaee,
+        roughness: 0.05,
+        metalness: 0,
+        transmission: 0.92,
+        thickness: 0.8,
+        ior: 1.5,
+        transparent: true,
+        opacity: 0.3,
+        depthWrite: false,
+        side: T.DoubleSide,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.05,
+      });
+      return m;
+    }
+    case "clear": {
+      const m = new T.MeshPhysicalMaterial({
+        color: 0xe6f0f2,
+        roughness: 0.04,
+        metalness: 0,
+        transmission: 0.95,
+        thickness: 0.5,
+        ior: 1.33,
+        transparent: true,
+        opacity: 0.18,
+        depthWrite: false,
+        side: T.DoubleSide,
+      });
+      return m;
+    }
+    case "amberglass": {
+      const m = new T.MeshPhysicalMaterial({
+        color: 0x7a4a1e,
+        roughness: 0.1,
+        metalness: 0,
+        transmission: 0.7,
+        thickness: 1.2,
+        ior: 1.52,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+        side: T.DoubleSide,
+        attenuationColor: new T.Color(0x7a4a1e),
+        attenuationDistance: 2.0,
+      });
+      return m;
+    }
+    /* Plastics */
+    case "plastic":
+      return new T.MeshStandardMaterial({ color: 0xf1efe9, roughness: 0.5, metalness: 0.03 });
+    case "whiteplastic":
+      return new T.MeshStandardMaterial({ color: 0xfbfbfa, roughness: 0.55, metalness: 0.02 });
+    /* Metal - aluminium can, closures */
+    case "metal": {
+      const m = new T.MeshStandardMaterial({
+        color: 0xc7ccd2,
+        roughness: 0.25,
+        metalness: 0.9,
+        envMapIntensity: 1.2,
+      });
+      return m;
+    }
+    case "foil": {
+      const m = new T.MeshStandardMaterial({
+        color: 0xcdd2d7,
+        roughness: 0.3,
+        metalness: 0.75,
+        envMapIntensity: 0.8,
+      });
+      return m;
+    }
+    /* Rubber - stoppers, bulbs */
+    case "rubber":
+      return new T.MeshStandardMaterial({ color: 0x5f646b, roughness: 0.9, metalness: 0 });
+    case "grey":
+      return new T.MeshStandardMaterial({ color: 0x9aa0a7, roughness: 0.7, metalness: 0.2 });
+    case "white":
+      return new T.MeshStandardMaterial({ color: 0xf4f4f2, roughness: 0.8, metalness: 0 });
+    /* Accent - colored cap/closures */
+    case "accent":
+      return new T.MeshStandardMaterial({ color: new T.Color(accentHex), roughness: 0.45, metalness: 0.12 });
+    default:
+      return new T.MeshStandardMaterial({ color: new T.Color(name), roughness: 0.5 });
+  }
+}
+
+/* ============================= */
+/* ENHANCED 3D VIEWER          */
+/* ============================= */
+
+function zoneMeta(cls, market) {
+  const M = market || "US";
+  const CITE = {
+    brand: { US: "21 CFR 201.10 / 701.11", EU: "Reg 1223/2009 Art. 19; Dir 2001/83 Art. 54", IN: "D&C Rules r.96" },
+    identity: { US: "21 CFR 101.3 / 701.11", EU: "Reg 1169/2011 Art. 9; MDR Annex I 23.2", IN: "FSS L&D 2020; D&C r.96" },
+    claims: { US: "21 CFR 201.5; FTC Act", EU: "Reg 655/2013 claims", IN: "D&C Act s.3(aaa)" },
+    net: { US: "21 CFR 101.7 / 701.13", EU: "Reg 1169/2011 Annex IX", IN: "Legal Metrology 2011 r.7" },
+    ingredients: { US: "21 CFR 701.3 / 101.4", EU: "Reg 1223/2009 Art. 19(1)(g)", IN: "Cosmetics Rules 2020" },
+    data: { US: "21 CFR 211.130 / .137", EU: "Dir 2001/83 Art. 54(f)(k)", IN: "D&C Rules r.96" },
+    responsible: { US: "21 CFR 701.12", EU: "Reg 1223/2009 Art. 19(1)(a)", IN: "Legal Metrology, Marketed by" },
+  };
+  const c = (k) => CITE[k][M] || CITE[k].US;
+  return {
+    front: [
+      { f0: 0, f1: 0.30, label: "Brand name", cite: c("brand"), why: "Identifies the product and the accountable maker.", cons: "Misbranding; the pack cannot be placed on the market." },
+      { f0: 0.30, f1: 0.58, label: "Product identity", cite: c("identity"), why: "States plainly what the product is.", cons: "Consumer-deception finding; relabelling." },
+      { f0: 0.58, f1: 0.80, label: "Function or claims", cite: c("claims"), why: "Sets the consumer expectation for the product.", cons: "An unsupported claim can reclassify the product as a drug." },
+      { f0: 0.80, f1: 1.01, label: "Net quantity", cite: c("net"), why: "Declares the amount in the container.", cons: "Short-measure penalty; stock seizure." },
+    ],
+    back: [
+      { f0: 0, f1: 0.16, label: "Information panel", cite: c("identity"), why: "Orients the reader to the detailed information.", cons: "Formatting observation." },
+      { f0: 0.16, f1: 0.60, label: cls === "fmcg" ? "Ingredients and allergens" : "Ingredients and directions", cite: c("ingredients"), why: "Discloses composition and safe use.", cons: cls === "fmcg" ? "An undeclared allergen triggers a Class I recall." : "Undeclared ingredient; misbranding." },
+      { f0: 0.60, f1: 0.82, label: "Batch, mfg, expiry", cite: c("data"), why: "Enables a targeted recall and a safe-use window.", cons: "A recall cannot be scoped to the affected lots." },
+      { f0: 0.82, f1: 1.01, label: "Responsible party", cite: c("responsible"), why: "Names the legally accountable entity.", cons: "Cannot be placed on the market." },
+    ],
+  };
+}
+
+function Viewer3D({ container, opts, fluidHex, accentHex, cls, market }) {
+  const mountRef = useRef(null);
+  const R = useRef({}).current;
+  const [spin, setSpin] = useState(true);
+  const [ok, setOk] = useState(true);
+  const [hover, setHover] = useState(null);
+
+  R.opts = opts;
+  R.spin = spin;
+  R.zones = zoneMeta(cls, market);
+
+  const draw = useCallback(() => {
+    if (!R.fCanvas) return;
+    try {
+      drawFront3(R.fCanvas, R.opts);
+      drawBack3(R.bCanvas, R.opts);
+      if (R.fTex) R.fTex.needsUpdate = true;
+      if (R.bTex) R.bTex.needsUpdate = true;
+    } catch (e) {}
+  }, [R]);
+
+  const build = useCallback(() => {
+    if (!R.scene) return;
+    try {
+      const g = R.group;
+      g.children.slice().forEach((c) => {
+        g.remove(c);
+        if (c.geometry) c.geometry.dispose();
+        if (c.material) {
+          if (Array.isArray(c.material)) c.material.forEach((m) => m.dispose());
+          else c.material.dispose();
+        }
+      });
+      R.capMats = [];
+      R.fluidMats = [];
+      R.labelMeshes = [];
+
+      const c = container;
+      const parts = c.parts || [];
+
+      /* Calculate total height for centering */
+      let maxY = 0;
+      parts.forEach((p) => {
+        let top = 0;
+        if (p.pts) {
+          /* lathe: find max y in profile */
+          top = Math.max(...p.pts.map((q) => q[1]));
+        } else if (p.k === "sph") {
+          top = (p.y || 0) + p.r * (p.sy || 1);
+        } else if (p.k === "torus") {
+          top = (p.y || 0) + p.r;
+        } else {
+          top = (p.y || 0) + (p.h || 0) / 2;
+        }
+        maxY = Math.max(maxY, top);
+      });
+      const H = Math.max(maxY, 2.2);
+
+      const add = (geo, mat, y, x, z) => {
+        const m = new THREE.Mesh(geo, mat);
+        m.position.y = y || 0;
+        if (x) m.position.x = x;
+        if (z) m.position.z = z;
+        g.add(m);
+        return m;
+      };
+
+      parts.forEach((p) => {
+        const mat = makeMat(THREE, p.mat, accentHex);
+        if (p.mat === "accent") R.capMats.push(mat);
+
+        const glassy = (p.mat && (p.mat.indexOf("glass") >= 0 || p.mat === "clear"));
+        const segs = p.seg || 56;
+
+        if (p.k === "lathe") {
+          const pts = p.pts.map((q) => new THREE.Vector2(q[0], q[1]));
+          /* Ensure closure for solid lathe */
+          if (pts[0].x > 0.001) pts.unshift(new THREE.Vector2(0.001, pts[0].y));
+          if (pts[pts.length - 1].x > 0.001) pts.push(new THREE.Vector2(0.001, pts[pts.length - 1].y));
+          const mm = add(new THREE.LatheGeometry(pts, segs), mat, 0);
+          mm.renderOrder = glassy ? 3 : 1;
+        }
+        else if (p.k === "cyl") {
+          const mm = add(new THREE.CylinderGeometry(p.rt, p.rb, p.h, segs, 1, false), mat, p.y);
+          if (p.x) mm.position.x = p.x;
+          if (p.z) mm.position.z = p.z;
+          mm.renderOrder = glassy ? 3 : 1;
+        }
+        else if (p.k === "disk") {
+          add(new THREE.CylinderGeometry(p.r, p.r, p.h || 0.06, segs), mat, p.y);
+        }
+        else if (p.k === "box") {
+          const mm = add(new THREE.BoxGeometry(p.w, p.h, p.d), mat, p.y);
+          if (p.x) mm.position.x = p.x;
+          if (p.z) mm.position.z = p.z;
+        }
+        else if (p.k === "sph") {
+          const geo = new THREE.SphereGeometry(p.r, segs, Math.floor(segs * 0.67));
+          const mm = add(geo, mat, p.y);
+          mm.scale.set(p.sx || 1, p.sy || 1, p.sz || 1);
+        }
+        else if (p.k === "torus") {
+          const geo = new THREE.TorusGeometry(p.rt || p.r, p.r, 12, segs);
+          const mm = add(geo, mat, p.y);
+          mm.rotation.x = Math.PI / 2;
+        }
+        else if (p.k === "blister") {
+          const domeMat = makeMat(THREE, "clear", accentHex);
+          const pillCols = ["#E7A5B0", "#F1D98A", "#AFC6E8", "#F2B48A"];
+          const pr = p.pr || 0.26, ox = p.ovx || 1, oy = p.ovy || 1;
+          for (let r = 0; r < p.rows; r++)
+            for (let col = 0; col < p.cols; col++) {
+              const px = -p.w / 2 + p.w * (col + 1) / (p.cols + 1);
+              const py = p.y - p.h / 2 + p.h * (r + 1) / (p.rows + 1);
+              const dome = new THREE.Mesh(
+                new THREE.SphereGeometry(pr, 28, 18, 0, Math.PI * 2, 0, Math.PI / 2),
+                domeMat
+              );
+              dome.position.set(px, py, 0.12);
+              dome.scale.set(ox, oy, 1);
+              dome.renderOrder = 3;
+              g.add(dome);
+              const tab = new THREE.Mesh(
+                new THREE.SphereGeometry(pr * 0.62, 22, 14),
+                makeMat(THREE, pillCols[(r + col) % 4], accentHex)
+              );
+              tab.position.set(px, py, 0.1);
+              tab.scale.set(ox, oy * 0.55, 0.6);
+              g.add(tab);
+            }
+        }
+        else if (p.k === "pack") {
+          const w = p.w, h = p.h, d = p.d, rr = p.r || Math.min(w, h) * 0.12;
+          const x0 = -w / 2, y0 = -h / 2;
+          const shp = new THREE.Shape();
+          shp.moveTo(x0 + rr, y0);
+          shp.lineTo(x0 + w - rr, y0); shp.quadraticCurveTo(x0 + w, y0, x0 + w, y0 + rr);
+          shp.lineTo(x0 + w, y0 + h - rr); shp.quadraticCurveTo(x0 + w, y0 + h, x0 + w - rr, y0 + h);
+          shp.lineTo(x0 + rr, y0 + h); shp.quadraticCurveTo(x0, y0 + h, x0, y0 + h - rr);
+          shp.lineTo(x0, y0 + rr); shp.quadraticCurveTo(x0, y0, x0 + rr, y0);
+          const bev = (p.bevel != null) ? p.bevel : Math.min(w, h) * 0.14;
+          const geo = new THREE.ExtrudeGeometry(shp, { depth: Math.max(d - 2 * bev * 0.6, 0.02), bevelEnabled: true, bevelThickness: bev, bevelSize: bev, bevelSegments: 6, steps: 1, curveSegments: 28 });
+          geo.center();
+          add(geo, mat, p.y);
+        }
+      });
+
+      /* Fluid fill */
+      if (c.fluid) {
+        const f = c.fluid;
+        const fm = new THREE.MeshPhysicalMaterial({
+          color: new THREE.Color(fluidHex),
+          roughness: 0.2,
+          metalness: 0,
+          transmission: 0.6,
+          thickness: 1.0,
+          transparent: true,
+          opacity: 0.88,
+          ior: 1.33,
+        });
+        R.fluidMats.push(fm);
+        const fl = add(new THREE.CylinderGeometry(f.r, f.r * 0.96, f.h, 48), fm, f.y);
+        fl.renderOrder = 2;
+      }
+
+      /* Labels */
+      const mkTex = (cv) => {
+        const t = new THREE.CanvasTexture(cv);
+        if ("colorSpace" in t && THREE.SRGBColorSpace) t.colorSpace = THREE.SRGBColorSpace;
+        else if (THREE.sRGBEncoding) t.encoding = THREE.sRGBEncoding;
+        t.anisotropy = 4;
+        return t;
+      };
+
+      if (c.flat && c.face) {
+        const fa = c.face;
+        const asp = fa.w / fa.h;
+        R.fCanvas = document.createElement("canvas");
+        R.fCanvas.width = 700;
+        R.fCanvas.height = Math.round(700 / asp);
+        R.bCanvas = document.createElement("canvas");
+        R.bCanvas.width = 700;
+        R.bCanvas.height = Math.round(700 / asp);
+        R.fTex = mkTex(R.fCanvas);
+        R.bTex = mkTex(R.bCanvas);
+        drawFront3(R.fCanvas, R.opts);
+        drawBack3(R.bCanvas, R.opts);
+
+        const fp = new THREE.Mesh(
+          new THREE.PlaneGeometry(fa.w, fa.h),
+          new THREE.MeshBasicMaterial({ map: R.fTex, transparent: true })
+        );
+        fp.position.set(0, fa.y, fa.z);
+        fp.renderOrder = 5;
+        fp.userData.face = "front";
+        R.labelMeshes.push(fp);
+        g.add(fp);
+
+        const bp = new THREE.Mesh(
+          new THREE.PlaneGeometry(fa.w, fa.h),
+          new THREE.MeshBasicMaterial({ map: R.bTex, transparent: true })
+        );
+        bp.position.set(0, fa.y, -fa.z);
+        bp.rotation.y = Math.PI;
+        bp.renderOrder = 5;
+        bp.userData.face = "back";
+        R.labelMeshes.push(bp);
+        g.add(bp);
+      } else if (c.band) {
+        const b = c.band;
+        const arc = b.arc * Math.PI / 180;
+        const arcLen = b.r * arc;
+        const asp = arcLen / b.h;
+        R.fCanvas = document.createElement("canvas");
+        R.fCanvas.width = 900;
+        R.fCanvas.height = Math.max(300, Math.round(900 / asp));
+        R.bCanvas = document.createElement("canvas");
+        R.bCanvas.width = 900;
+        R.bCanvas.height = Math.max(300, Math.round(900 / asp));
+        R.fTex = mkTex(R.fCanvas);
+        R.bTex = mkTex(R.bCanvas);
+        drawFront3(R.fCanvas, R.opts);
+        drawBack3(R.bCanvas, R.opts);
+
+        const mkBand = (tex, center) => {
+          const geo = new THREE.CylinderGeometry(b.r, b.r, b.h, 64, 1, true, center - arc / 2, arc);
+          const m = new THREE.Mesh(
+            geo,
+            new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide })
+          );
+          m.position.y = b.y;
+          m.renderOrder = 5;
+          return m;
+        };
+        const bandF = mkBand(R.fTex, 0); bandF.userData.face = "front"; R.labelMeshes.push(bandF); g.add(bandF);
+        const bandB = mkBand(R.bTex, Math.PI); bandB.userData.face = "back"; R.labelMeshes.push(bandB); g.add(bandB);
+      }
+
+      g.position.y = -H / 2;
+      R.cam.position.set(0, 0, H * 1.55 + 2.6);
+      R.cam.lookAt(0, 0, 0);
+      if (R.shadow) R.shadow.position.y = -H / 2 - 0.04;
+      setOk(true);
+    } catch (e) {
+      console.error("3D build error:", e);
+      setOk(false);
+    }
+  }, [container, accentHex, fluidHex, R]);
+
+  useEffect(() => {
+    const mount = mountRef.current;
+    if (!mount) return;
+    const w = mount.clientWidth || 600, h = mount.clientHeight || 460;
+
+    let renderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    } catch (e) {
+      setOk(false);
+      return;
+    }
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(w, h);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
+    if ("outputColorSpace" in renderer && THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace;
+    else if (THREE.sRGBEncoding) renderer.outputEncoding = THREE.sRGBEncoding;
+    mount.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    /* Generated studio environment so glass transmission, clearcoat, and metal
+       actually refract and reflect. Guarded: if unsupported, the material
+       opacity keeps the glass visible as a fallback. */
+    try {
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      const ec = document.createElement("canvas"); ec.width = 32; ec.height = 128;
+      const eg = ec.getContext("2d");
+      const grd = eg.createLinearGradient(0, 0, 0, 128);
+      grd.addColorStop(0, "#ffffff"); grd.addColorStop(0.45, "#e6ebf0"); grd.addColorStop(0.7, "#c2c9d2"); grd.addColorStop(1, "#9aa3ae");
+      eg.fillStyle = grd; eg.fillRect(0, 0, 32, 128);
+      eg.fillStyle = "rgba(255,255,255,0.9)"; eg.beginPath(); eg.ellipse(16, 30, 9, 20, 0, 0, 7); eg.fill();
+      const et = new THREE.CanvasTexture(ec); et.mapping = THREE.EquirectangularReflectionMapping;
+      const envRT = pmrem.fromEquirectangular(et);
+      scene.environment = envRT.texture;
+      et.dispose(); pmrem.dispose();
+    } catch (e) {}
+    const cam = new THREE.PerspectiveCamera(34, w / h, 0.1, 100);
+    cam.position.set(0, 0, 7);
+
+    /* Enhanced lighting setup */
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x8a929c, 0.8));
+
+    const d1 = new THREE.DirectionalLight(0xffffff, 1.0);
+    d1.position.set(3, 6, 6);
+    d1.castShadow = false;
+    scene.add(d1);
+
+    const d2 = new THREE.DirectionalLight(0xfff5e6, 0.35);
+    d2.position.set(-5, 2, -4);
+    scene.add(d2);
+
+    const d3 = new THREE.DirectionalLight(0xe6f0ff, 0.25);
+    d3.position.set(0, -3, 4);
+    scene.add(d3);
+
+    /* Rim light for glass edges */
+    const rim = new THREE.DirectionalLight(0xffffff, 0.4);
+    rim.position.set(-4, 4, -6);
+    scene.add(rim);
+
+    const group = new THREE.Group();
+    scene.add(group);
+
+    /* Soft shadow under container */
+    const scv = document.createElement("canvas");
+    scv.width = scv.height = 128;
+    const sxc = scv.getContext("2d");
+    const grd = sxc.createRadialGradient(64, 64, 4, 64, 64, 62);
+    grd.addColorStop(0, "rgba(0,0,0,0.22)");
+    grd.addColorStop(0.5, "rgba(0,0,0,0.08)");
+    grd.addColorStop(1, "rgba(0,0,0,0)");
+    sxc.fillStyle = grd;
+    sxc.fillRect(0, 0, 128, 128);
+    const shadow = new THREE.Mesh(
+      new THREE.PlaneGeometry(5, 5),
+      new THREE.MeshBasicMaterial({
+        map: new THREE.CanvasTexture(scv),
+        transparent: true,
+        depthWrite: false,
+      })
+    );
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.position.y = -1.85;
+    scene.add(shadow);
+    R.shadow = shadow;
+
+    Object.assign(R, { renderer, scene, cam, group, target: { x: -0.12, y: 0.5 }, cur: { x: -0.12, y: 0.5 } });
+
+    /* Interaction */
+    const el = renderer.domElement;
+    el.style.cursor = "grab";
+    let dragging = false, lx = 0, ly = 0;
+
+    const down = (e) => {
+      dragging = true;
+      el.style.cursor = "grabbing";
+      const p = e.touches ? e.touches[0] : e;
+      lx = p.clientX;
+      ly = p.clientY;
+    };
+    const move = (e) => {
+      if (!dragging) return;
+      const p = e.touches ? e.touches[0] : e;
+      R.target.y += (p.clientX - lx) * 0.01;
+      R.target.x += (p.clientY - ly) * 0.01;
+      R.target.x = Math.max(-1.3, Math.min(1.3, R.target.x));
+      lx = p.clientX;
+      ly = p.clientY;
+    };
+    const up = () => {
+      dragging = false;
+      el.style.cursor = "grab";
+    };
+
+    el.addEventListener("mousedown", down);
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    el.addEventListener("touchstart", down, { passive: true });
+    el.addEventListener("touchmove", move, { passive: true });
+    el.addEventListener("touchend", up);
+
+    const ray = new THREE.Raycaster();
+    const ptr = new THREE.Vector2();
+    const hoverMove = (e) => {
+      if (dragging) { setHover(null); return; }
+      const r = el.getBoundingClientRect();
+      ptr.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+      ptr.y = -((e.clientY - r.top) / r.height) * 2 + 1;
+      ray.setFromCamera(ptr, cam);
+      const hits = (R.labelMeshes && R.labelMeshes.length) ? ray.intersectObjects(R.labelMeshes, false) : [];
+      if (!hits.length || !hits[0].uv) { setHover(null); return; }
+      const face = hits[0].object.userData.face || "front";
+      const topFrac = 1 - hits[0].uv.y;
+      const zones = (R.zones && R.zones[face]) || [];
+      const z = zones.find((q) => topFrac >= q.f0 && topFrac < q.f1);
+      if (!z) { setHover(null); return; }
+      setHover({ sx: e.clientX - r.left, sy: e.clientY - r.top, z });
+    };
+    const hoverLeave = () => setHover(null);
+    el.addEventListener("mousemove", hoverMove);
+    el.addEventListener("mouseleave", hoverLeave);
+
+    /* Animation loop */
+    const animate = () => {
+      R.raf = requestAnimationFrame(animate);
+      if (R.spin && !dragging) R.target.y += 0.004;
+      R.cur.x += (R.target.x - R.cur.x) * 0.12;
+      R.cur.y += (R.target.y - R.cur.y) * 0.12;
+      group.rotation.x = R.cur.x;
+      group.rotation.y = R.cur.y;
+      renderer.render(scene, cam);
+    };
+    animate();
+
+    /* Resize handling */
+    const ro = new ResizeObserver(() => {
+      const ww = mount.clientWidth || 600, hh = mount.clientHeight || 460;
+      cam.aspect = ww / hh;
+      cam.updateProjectionMatrix();
+      renderer.setSize(ww, hh);
+    });
+    ro.observe(mount);
+
+    /* Font-ready redraw */
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(() => draw());
+    }
+
+    R.built = true;
+    build();
+
+    return () => {
+      cancelAnimationFrame(R.raf);
+      ro.disconnect();
+      el.removeEventListener("mousedown", down);
+      el.removeEventListener("mousemove", hoverMove);
+      el.removeEventListener("mouseleave", hoverLeave);
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      try { renderer.dispose(); } catch (e) {}
+      if (el.parentNode) el.parentNode.removeChild(el);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => { build(); }, [container.label]); // eslint-disable-line
+  useEffect(() => { draw(); }, [opts.brand, opts.name, opts.descriptor, opts.net, opts.back, opts.mfg, opts.exp, opts.batch, opts.responsible, opts.heading, opts.bg, opts.ink, opts.accent, opts.pattern, opts.style]); // eslint-disable-line
+  useEffect(() => { if (R.fluidMats) R.fluidMats.forEach((m) => m.color.set(fluidHex)); }, [fluidHex]); // eslint-disable-line
+  useEffect(() => { if (R.capMats) R.capMats.forEach((m) => m.color.set(accentHex)); }, [accentHex]); // eslint-disable-line
+
+  const setView = (x, y) => { R.target.x = x; R.target.y = y; setSpin(false); };
+
+  return (
+    <div className="v3-shell">
+      <div ref={mountRef} className="v3-canvas" />
+      {!ok && <div className="v3-fail">This container is being tuned, or 3D is unavailable in this view.</div>}
+      <div className="v3-controls">
+        <button onClick={() => setView(-0.12, 0)}>Front</button>
+        <button onClick={() => setView(-0.12, Math.PI)}>Back</button>
+        <button onClick={() => setView(-0.9, 0)}>Top</button>
+        <button onClick={() => { R.target = { x: -0.12, y: 0.5 }; setSpin(true); }}><RotateCcw size={13} /> Reset</button>
+        <button className={spin ? "on" : ""} onClick={() => setSpin((s) => !s)}>{spin ? <Pause size={13} /> : <Play size={13} />} Spin</button>
+      </div>
+      {hover && ok && (
+        <div className="v3-tip" style={{ left: Math.min(hover.sx + 14, 340), top: Math.max(hover.sy - 10, 8) }}>
+          <div className="v3-tip-h">{hover.z.label}</div>
+          <div className="v3-tip-c">{hover.z.cite}</div>
+          <div className="v3-tip-w">{hover.z.why}</div>
+          <div className="v3-tip-x">If missing: {hover.z.cons}</div>
+        </div>
+      )}
+      <div className="v3-hint">Drag to rotate · hover the label to inspect</div>
+    </div>
+  );
+}
+
+/* ==================================================================== */
+/* ========  STAGE 4 + 5: data-carrier engine and enforcement  ======= */
+/* ==================================================================== */
+
+const ENFORCE = {
+  cosmetic: [
+    { el: "Therapeutic claim without a drug licence", cite: "D&C Act 1940 s.3(aaa), IN", act: "Product seizure and criminal prosecution", impact: "CDSCO COS-1 cancellation; up to 1 year imprisonment" },
+    { el: "Missing responsible person or importer", cite: "Reg 1223/2009 Art. 19(1)(a), EU", act: "Cannot be placed on the market", impact: "Product withdrawal" },
+    { el: "Expiry not in MM/YYYY", cite: "Cosmetics Rules 2020, IN", act: "Non-compliance, re-labelling", impact: "Consignment held at import" },
+  ],
+  pharma: [
+    { el: "Active or strength mislabelled", cite: "21 CFR 201.100, US", act: "Warning letter escalating to recall", impact: "Class I or II recall; market hold" },
+    { el: "Missing safety features (2D + anti-tamper)", cite: "Del. Reg 2016/161, EU", act: "Cannot be dispensed", impact: "Batch quarantine" },
+    { el: "Serious hazard (CDSCO Class I)", cite: "CDSCO Rapid Alert, IN", act: "Halt distribution within 24 h", impact: "Full supply-chain retrieval within 72 h" },
+  ],
+  device: [
+    { el: "CE mark under 5 mm or missing Notified Body ID", cite: "MDR 2017/745 Annex I 23.2, EU", act: "CE certificate suspension and customs hold", impact: "Fine up to EUR 100,000 (e.g. German ProdSG)" },
+    { el: "Mismatched UDI-DI or UDI-PI across layers", cite: "MDR Art. 27, EU", act: "Notified Body non-conformity", impact: "Market-access denial; artwork redesign" },
+    { el: "Sector quality events and recalls", cite: "industry aggregate", act: "Recalls and field actions", impact: "USD 7 to 8.5 B per year, about 2% of device sales" },
+  ],
+  fmcg: [
+    { el: "Undeclared major allergen (e.g. milk)", cite: "21 CFR 117.135; FALCPA, US", act: "Warning letter and immediate Class I recall", impact: "Avg direct cost USD 10 M; can exceed USD 100 M" },
+    { el: "FSSAI number shown without the logo", cite: "FSS L&D 2020, IN", act: "Misbranding prosecution and licence review", impact: "Fine up to INR 3 lakh" },
+    { el: "MRP or net-weight mislabelled", cite: "Legal Metrology 2011, IN", act: "Stock seizure and prosecution", impact: "Fine up to INR 1 lakh; shelf removal" },
+  ],
+};
+const RECALL_TL = [
+  { cls: "Class I", sev: "Serious hazard or death", inTL: "Halt in 24 h, retrieve in 72 h" },
+  { cls: "Class II", sev: "Temporary or reversible", inTL: "Complete within 10 days" },
+  { cls: "Class III", sev: "Unlikely adverse effect", inTL: "Complete within 30 days" },
+];
+
+/* EAN-13 (real encoding + GS1 mod-10 check digit) */
+const EAN_L = ["0001101","0011001","0010011","0111101","0100011","0110001","0101111","0111011","0110111","0001011"];
+const EAN_G = ["0100111","0110011","0011011","0100001","0011101","0111001","0000101","0010001","0001001","0010111"];
+const EAN_R = ["1110010","1100110","1101100","1000010","1011100","1001110","1010000","1000100","1001000","1110100"];
+const EAN_PAR = ["LLLLLL","LLGLGG","LLGGLG","LLGGGL","LGLLGG","LGGLLG","LGGGLL","LGLGLG","LGLGGL","LGGLGL"];
+function ean13Check(d12) { let s = 0; for (let i = 0; i < 12; i++) s += (+d12[i] || 0) * (i % 2 === 0 ? 1 : 3); return (10 - (s % 10)) % 10; }
+function gtin14Check(d13) { let s = 0; for (let i = 0; i < 13; i++) s += (+d13[i] || 0) * (i % 2 === 0 ? 3 : 1); return (10 - (s % 10)) % 10; }
+function ean13Bits(d13) {
+  const par = EAN_PAR[+d13[0]]; let bits = "101";
+  for (let i = 1; i <= 6; i++) bits += (par[i - 1] === "L" ? EAN_L : EAN_G)[+d13[i]];
+  bits += "01010";
+  for (let i = 7; i <= 12; i++) bits += EAN_R[+d13[i]];
+  return bits + "101";
+}
+/* deterministic 2D module grid (representative matrix for grading, not a decodable symbol) */
+function matrixGrid(seedStr, n) {
+  let h = 2166136261; for (let i = 0; i < seedStr.length; i++) { h ^= seedStr.charCodeAt(i); h = Math.imul(h, 16777619); }
+  const rnd = () => { h ^= h << 13; h ^= h >>> 17; h ^= h << 5; return ((h >>> 0) % 1000) / 1000; };
+  const g = Array.from({ length: n }, () => Array.from({ length: n }, () => rnd() > 0.5 ? 1 : 0));
+  const finder = (r, c) => { for (let i = 0; i < 7; i++) for (let j = 0; j < 7; j++) { const edge = i === 0 || i === 6 || j === 0 || j === 6; const inner = i >= 2 && i <= 4 && j >= 2 && j <= 4; g[r + i][c + j] = (edge || inner) ? 1 : 0; } };
+  finder(0, 0); finder(0, n - 7); finder(n - 7, 0);
+  return g;
+}
+const GLET = ["F", "D", "C", "B", "A"];
+function gradeVal(v, t, higher) { return higher ? (v >= t[0] ? 4 : v >= t[1] ? 3 : v >= t[2] ? 2 : v >= t[3] ? 1 : 0) : (v <= t[0] ? 4 : v <= t[1] ? 3 : v <= t[2] ? 2 : v <= t[3] ? 1 : 0); }
+const GC = ["#C0392B", "#C0392B", "#B7791F", "#0E7A4A", "#0E7A4A"];
+
+function Carrier({ cls, market, brand, accentHex }) {
+  const [base, setBase] = useState("890123456789");
+  const [lot, setLot] = useState((brand && brand.batch) || "A2451");
+  const [serial, setSerial] = useState("");
+  const [contrast, setContrast] = useState(88);
+  const [modv, setModv] = useState(72);
+  const [reg, setReg] = useState(18);
+  const [defect, setDefect] = useState(6);
+  const [qz, setQz] = useState(11);
+  const c1 = useRef(null), c2 = useRef(null);
+
+  const d12 = (base + "000000000000").slice(0, 12).replace(/\D/g, "").padEnd(12, "0");
+  const check = ean13Check(d12);
+  const gtin13 = d12 + check;
+  const gtin14 = "0" + gtin13;
+  const gtinOK = gtin14Check(gtin14.slice(0, 13)) === (+gtin14[13]);
+  const dl = `https://id.gs1.org/01/${gtin14}/10/${encodeURIComponent(lot || "")}` + (serial ? `/21/${encodeURIComponent(serial)}` : "") + `?linkType=all&market=${market}`;
+
+  const params = useMemo(() => {
+    const anu = +(reg * 0.14).toFixed(1), gnu = +(reg * 0.24).toFixed(1);
+    const uec = Math.max(0, 100 - defect * 3.2);
+    return [
+      { k: "Symbol Contrast", v: contrast, u: "%", g: gradeVal(contrast, [90, 75, 55, 40], true), min: "≥ 55%" },
+      { k: "Modulation", v: modv, u: "%", g: gradeVal(modv, [80, 60, 40, 25], true), min: "≥ 40%" },
+      { k: "Axial nonuniformity", v: anu, u: "%", g: gradeVal(anu, [3, 5, 8, 11], false), min: "≤ 8%" },
+      { k: "Grid nonuniformity", v: gnu, u: "%", g: gradeVal(gnu, [5, 8, 12, 16], false), min: "≤ 12%" },
+      { k: "Defects", v: defect, u: "%", g: gradeVal(defect, [5, 10, 15, 20], false), min: "≤ 15%" },
+      { k: "Unused error correction", v: +uec.toFixed(0), u: "%", g: gradeVal(uec, [85, 75, 62, 45], true), min: "≥ 62%" },
+      { k: "Quiet zone", v: qz, u: "×X", g: gradeVal(qz, [12, 11, 10, 8], true), min: "≥ 10×X" },
+    ];
+  }, [contrast, modv, reg, defect, qz]);
+  const overall = Math.min(...params.map((p) => p.g));
+
+  useEffect(() => {
+    const cv = c1.current; if (!cv) return; const ctx = cv.getContext("2d"); const W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H);
+    const bits = ean13Bits(gtin13); const qzMod = Math.max(2, qz - 2);
+    const total = bits.length + qzMod * 2; const mod = W / total; const dark = Math.round(40 + (100 - contrast) * 1.6);
+    ctx.fillStyle = `rgb(${dark},${dark},${dark})`;
+    let h = 2469; const rnd = () => { h ^= h << 13; h ^= h >>> 17; h ^= h << 5; return ((h >>> 0) % 1000) / 1000; };
+    for (let i = 0; i < bits.length; i++) if (bits[i] === "1") { if (rnd() * 100 < defect) continue; ctx.fillRect((qzMod + i) * mod, 8, mod + 0.4, H - 34); }
+    ctx.fillStyle = "#16243B"; ctx.font = "13px 'IBM Plex Mono', monospace"; ctx.textAlign = "center";
+    ctx.fillText(gtin13.split("").join(" "), W / 2, H - 8);
+  }, [gtin13, contrast, defect, qz]);
+
+  useEffect(() => {
+    const cv = c2.current; if (!cv) return; const ctx = cv.getContext("2d"); const S = cv.width; const n = 22;
+    ctx.clearRect(0, 0, S, S); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, S, S);
+    const g = matrixGrid(gtin14 + lot + serial, n); const m = S / (n + 2); const dark = Math.round(40 + (100 - contrast) * 1.6);
+    ctx.fillStyle = `rgb(${dark},${dark},${dark})`;
+    let h = 9127; const rnd = () => { h ^= h << 13; h ^= h >>> 17; h ^= h << 5; return ((h >>> 0) % 1000) / 1000; };
+    for (let r = 0; r < n; r++) for (let cc = 0; cc < n; cc++) if (g[r][cc]) { if (rnd() * 100 < defect) continue; ctx.fillRect((cc + 1) * m, (r + 1) * m, m + 0.4, m + 0.4); }
+  }, [gtin14, lot, serial, contrast, defect]);
+
+  const S = { card: { background: "#fff", border: "1px solid var(--line)", borderRadius: 10, padding: "14px 16px" }, lbl: { fontSize: 10.5, fontFamily: "'IBM Plex Mono',monospace", color: "var(--ink2)", letterSpacing: "0.06em", textTransform: "uppercase" }, inp: { border: "1px solid var(--line)", borderRadius: 6, padding: "6px 8px", fontFamily: "'IBM Plex Mono',monospace", fontSize: 12.5, width: "100%", color: "var(--ink)" } };
+  const slider = (label, val, set, min, max, step, suffix) => (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--ink2)", marginBottom: 2 }}><span>{label}</span><b style={{ color: "var(--ink)" }}>{val}{suffix}</b></div>
+      <input type="range" min={min} max={max} step={step} value={val} onChange={(e) => set(+e.target.value)} style={{ width: "100%", accentColor: "var(--die)" }} />
+    </div>
+  );
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 14, fontFamily: "'IBM Plex Sans',sans-serif", color: "var(--ink)" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 14 }}>
+        <div style={S.card}>
+          <div style={S.lbl}>1D linear · EAN-13 (GS1)</div>
+          <canvas ref={c1} width={520} height={150} style={{ width: "100%", height: "auto", marginTop: 8, borderRadius: 6 }} />
+          <div style={{ fontSize: 11, color: "var(--ink2)", marginTop: 6 }}>Check digit <b style={{ color: "var(--mand, #0E7A4A)" }}>{check}</b> computed by GS1 mod-10. ISO/IEC 15416.</div>
+        </div>
+        <div style={S.card}>
+          <div style={S.lbl}>2D matrix · GS1 DataMatrix</div>
+          <canvas ref={c2} width={190} height={190} style={{ width: 190, height: 190, marginTop: 8, borderRadius: 6, display: "block", marginLeft: "auto", marginRight: "auto" }} />
+          <div style={{ fontSize: 11, color: "var(--ink2)", marginTop: 6, textAlign: "center" }}>Representative modules. ISO/IEC 15415.</div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "0.9fr 1.1fr", gap: 14 }}>
+        <div style={S.card}>
+          <div style={S.lbl}>Print quality</div>
+          <div style={{ marginTop: 10 }}>
+            {slider("Symbol contrast", contrast, setContrast, 20, 100, 1, "%")}
+            {slider("Modulation", modv, setModv, 10, 100, 1, "%")}
+            {slider("Registration error", reg, setReg, 0, 100, 1, "")}
+            {slider("Defects", defect, setDefect, 0, 30, 1, "%")}
+            {slider("Quiet zone", qz, setQz, 4, 14, 1, "×X")}
+          </div>
+        </div>
+        <div style={S.card}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={S.lbl}>ISO verification grade</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontFamily: "'Space Grotesk',sans-serif", fontWeight: 700, fontSize: 22, color: GC[overall] }}>{GLET[overall]}</span>
+              <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, color: "var(--ink2)" }}>{overall.toFixed(1)} / 4.0</span>
+            </div>
+          </div>
+          <div style={{ marginTop: 8 }}>
+            {params.map((p) => (
+              <div key={p.k} style={{ display: "grid", gridTemplateColumns: "1.5fr 0.7fr 0.6fr 0.5fr", gap: 6, alignItems: "center", padding: "4px 0", borderBottom: "1px solid var(--line2)", fontSize: 11.5 }}>
+                <span>{p.k}</span>
+                <span style={{ fontFamily: "'IBM Plex Mono',monospace", color: "var(--ink2)" }}>{p.v}{p.u}</span>
+                <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: "var(--ink2)" }}>{p.min}</span>
+                <span style={{ textAlign: "right", fontWeight: 700, color: GC[p.g] }}>{GLET[p.g]}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 10.5, color: "var(--ink2)", marginTop: 8 }}>Overall grade is the lowest-scoring parameter, per ISO/IEC 15415 and 15416.</div>
+        </div>
+      </div>
+
+      <div style={S.card}>
+        <div style={S.lbl}>GS1 Digital Link</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, margin: "10px 0" }}>
+          <div><div style={{ fontSize: 10.5, color: "var(--ink2)", marginBottom: 3 }}>GTIN base (12 digits)</div><input style={S.inp} value={base} maxLength={12} onChange={(e) => setBase(e.target.value.replace(/\D/g, ""))} /></div>
+          <div><div style={{ fontSize: 10.5, color: "var(--ink2)", marginBottom: 3 }}>Lot / batch (AI 10)</div><input style={S.inp} value={lot} onChange={(e) => setLot(e.target.value)} /></div>
+          <div><div style={{ fontSize: 10.5, color: "var(--ink2)", marginBottom: 3 }}>Serial (AI 21, optional)</div><input style={S.inp} value={serial} onChange={(e) => setSerial(e.target.value)} /></div>
+        </div>
+        <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 12, wordBreak: "break-all", background: "var(--line2)", padding: "8px 10px", borderRadius: 6, color: "var(--ink)" }}>{dl}</div>
+        <div style={{ display: "flex", gap: 16, marginTop: 8, fontSize: 11.5, flexWrap: "wrap" }}>
+          <span>GTIN-14 <b style={{ fontFamily: "'IBM Plex Mono',monospace" }}>{gtin14}</b></span>
+          <span>Check digit <b style={{ color: gtinOK ? "#0E7A4A" : "#C0392B" }}>{gtinOK ? "valid" : "invalid"}</b></span>
+          <span>AI (01) GTIN · (10) lot{serial ? " · (21) serial" : ""}</span>
+        </div>
+        <div style={{ fontSize: 10.5, color: "var(--ink2)", marginTop: 6 }}>POS scan resolves to the GTIN for pricing; a phone scan resolves to localized information for {market}.</div>
+      </div>
+
+      <div style={S.card}>
+        <div style={S.lbl}>Enforcement and impact · {cls} · {market}</div>
+        <div style={{ marginTop: 8 }}>
+          {(ENFORCE[cls] || []).map((r, i) => (
+            <div key={i} style={{ padding: "7px 0", borderBottom: "1px solid var(--line2)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <b style={{ fontSize: 12.5 }}>{r.el}</b>
+                <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10.5, color: "var(--die)" }}>{r.cite}</span>
+              </div>
+              <div style={{ fontSize: 11.5, color: "var(--ink2)", marginTop: 2 }}>{r.act}. <span style={{ color: "#C0392B" }}>{r.impact}</span></div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginTop: 10 }}>
+          {RECALL_TL.map((t) => (
+            <div key={t.cls} style={{ background: "var(--line2)", borderRadius: 6, padding: "7px 9px" }}>
+              <div style={{ fontWeight: 700, fontSize: 12 }}>{t.cls}</div>
+              <div style={{ fontSize: 10.5, color: "var(--ink2)" }}>{t.sev}</div>
+              <div style={{ fontSize: 10.5, color: "var(--ink)", marginTop: 3, fontFamily: "'IBM Plex Mono',monospace" }}>{t.inTL}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===== PDP area + minimum size validator (21 CFR 101.1/101.7, Legal Metrology Rule 7, FSSAI symbol scaling) ===== */
+const SZ_RECT = ["carton", "blister", "sachet", "pouch", "chips"];
+function Sizer({ cls, market, container }) {
+  const isRect = SZ_RECT.indexOf(container) >= 0;
+  const molded0 = ["soda", "pillbottle", "syrupbottle", "mist", "airless", "jar", "dropper", "vial", "vaccine", "ampoule"].indexOf(container) >= 0;
+  const [h, setH] = React.useState(120);
+  const [w, setW] = React.useState(isRect ? 70 : 55);
+  const [molded, setMolded] = React.useState(molded0);
+  React.useEffect(() => { setW(SZ_RECT.indexOf(container) >= 0 ? 70 : 55); setMolded(["soda", "pillbottle", "syrupbottle", "mist", "airless", "jar", "dropper", "vial", "vaccine", "ampoule"].indexOf(container) >= 0); }, [container]);
+
+  const areaCm2 = isRect ? (h / 10) * (w / 10) : 0.40 * (h / 10) * (Math.PI * (w / 10));
+  const areaIn2 = areaCm2 / 6.4516;
+  const r1 = (n) => Math.round(n * 10) / 10;
+
+  const usIn = areaIn2 <= 5 ? 1 / 16 : areaIn2 <= 25 ? 1 / 8 : areaIn2 <= 100 ? 3 / 16 : areaIn2 <= 400 ? 1 / 4 : 1 / 2;
+  const usFrac = areaIn2 <= 5 ? "1/16 in" : areaIn2 <= 25 ? "1/8 in" : areaIn2 <= 100 ? "3/16 in" : areaIn2 <= 400 ? "1/4 in" : "1/2 in";
+  const usMm = usIn * 25.4;
+
+  const inRow = areaCm2 < 50 ? [1.0, 1.5] : areaCm2 < 100 ? [1.5, 3.0] : areaCm2 < 500 ? [2.5, 4.0] : areaCm2 < 2500 ? [4.0, 6.0] : [6.0, 6.0];
+  const inMm = molded ? inRow[1] : inRow[0];
+  const symRow = areaCm2 <= 100 ? [3, 6] : areaCm2 <= 500 ? [4, 8] : areaCm2 <= 2500 ? [6, 12] : [8, 16];
+  const symDia = symRow[0], symSide = symRow[1];
+
+  const PX = 3.4;
+  const SANSf = "'IBM Plex Sans', sans-serif", MONOf = "'IBM Plex Mono', monospace", DISPf = "'Space Grotesk', sans-serif";
+  const wrap = { fontFamily: SANSf, color: "var(--ink)", fontSize: 13, lineHeight: 1.5, height: "100%", overflow: "auto", padding: "4px 2px" };
+  const lbl = { fontFamily: MONOf, fontSize: 10, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--ink2)", marginBottom: 6 };
+  const card = { border: "1px solid var(--line)", borderRadius: 10, padding: "14px 16px", marginBottom: 12, background: "var(--card)" };
+  const inrow = { display: "flex", alignItems: "center", gap: 10, marginBottom: 10 };
+  const inp = { width: 74, padding: "5px 7px", border: "1px solid var(--line)", borderRadius: 6, fontFamily: MONOf, fontSize: 12, color: "var(--ink)", background: "var(--bg)" };
+  const big = { fontFamily: DISPf, fontSize: 22, fontWeight: 600, color: "var(--ink)" };
+  const die = { color: "var(--die)" };
+  const rulerMm = 10;
+
+  const letterBlock = (mm, caption) => (
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 14, marginTop: 8 }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 3, borderBottom: "1px solid var(--line)", paddingBottom: 4 }}>
+        <span style={{ fontFamily: SANSf, fontWeight: 700, lineHeight: 0.8, fontSize: mm * PX, color: "var(--die)" }}>A</span>
+        <span style={{ fontFamily: SANSf, fontWeight: 400, lineHeight: 0.8, fontSize: mm * PX, color: "var(--ink)" }}>a1</span>
+      </div>
+      <div style={{ fontFamily: MONOf, fontSize: 11, color: "var(--ink2)" }}>{caption}<br /><b style={{ color: "var(--ink)" }}>{r1(mm)} mm</b> tall, shown to scale</div>
+    </div>
+  );
+
+  return (
+    <div style={wrap}>
+      <div style={{ ...big, marginBottom: 2 }}>PDP <span style={die}>and minimum size</span></div>
+      <div style={{ fontFamily: MONOf, fontSize: 11, color: "var(--ink2)", marginBottom: 14 }}>Principal display panel area drives the smallest legal type and symbol sizes.</div>
+
+      <div style={card}>
+        <div style={lbl}>Container geometry</div>
+        <div style={inrow}>
+          <span style={{ width: 92 }}>{isRect ? "Height" : "Height"}</span>
+          <input style={inp} type="number" value={h} onChange={(e) => setH(Math.max(1, +e.target.value || 0))} /><span style={{ color: "var(--ink2)" }}>mm</span>
+        </div>
+        <div style={inrow}>
+          <span style={{ width: 92 }}>{isRect ? "PDP width" : "Diameter"}</span>
+          <input style={inp} type="number" value={w} onChange={(e) => setW(Math.max(1, +e.target.value || 0))} /><span style={{ color: "var(--ink2)" }}>mm</span>
+        </div>
+        <div style={{ ...inrow, marginBottom: 0 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer" }}>
+            <input type="checkbox" checked={molded} onChange={(e) => setMolded(e.target.checked)} /> Moulded or blown container
+          </label>
+        </div>
+        <div style={{ fontFamily: MONOf, fontSize: 10, color: "var(--ink2)", marginTop: 8 }}>{isRect ? "Rectangular: PDP = height x width" : "Cylindrical: PDP = 40% x height x circumference (21 CFR 101.1)"}</div>
+      </div>
+
+      <div style={card}>
+        <div style={lbl}>Principal display panel area</div>
+        <div style={{ display: "flex", gap: 26, alignItems: "baseline" }}>
+          <div><span style={big}>{areaCm2 >= 100 ? Math.round(areaCm2) : r1(areaCm2)}</span> <span style={{ color: "var(--ink2)" }}>cm2</span></div>
+          <div><span style={{ ...big, fontSize: 18 }}>{r1(areaIn2)}</span> <span style={{ color: "var(--ink2)" }}>sq in</span></div>
+        </div>
+      </div>
+
+      {market === "US" && (
+        <div style={card}>
+          <div style={lbl}>United States, net quantity type size (21 CFR 101.7)</div>
+          <div>Minimum height of the net-quantity declaration for this PDP: <b style={die}>{usFrac}</b> ({r1(usMm)} mm).</div>
+          {letterBlock(usMm, "Net quantity declaration")}
+          <div style={{ fontFamily: MONOf, fontSize: 10, color: "var(--ink2)", marginTop: 10 }}>Patient instructions for use: body text 10 pt or larger, 8 pt floor for legal lines (FDA IFU guidance).</div>
+        </div>
+      )}
+
+      {market === "IN" && (
+        <div style={card}>
+          <div style={lbl}>India, letter and numeral height (Legal Metrology Rule 7, Table I)</div>
+          <div>Minimum height for this PDP, {molded ? "moulded or blown" : "normal print"}: <b style={die}>{r1(inMm)} mm</b>.</div>
+          {letterBlock(inMm, "Declarations and numerals")}
+          <div style={{ fontFamily: MONOf, fontSize: 10, color: "var(--ink2)", marginTop: 10 }}>Letter width at least one third of height (Rule 7(3)), except 1, i, I and l.</div>
+        </div>
+      )}
+
+      {market === "IN" && cls === "fmcg" && (
+        <div style={card}>
+          <div style={lbl}>India, veg / non-veg symbol scaling (FSSAI L&D 2020)</div>
+          <div style={{ display: "flex", gap: 30, marginTop: 10, alignItems: "flex-start" }}>
+            <div style={{ textAlign: "center" }}>
+              <svg width={symSide * PX} height={symSide * PX} viewBox={"0 0 " + symSide + " " + symSide}>
+                <rect x="0.5" y="0.5" width={symSide - 1} height={symSide - 1} fill="none" stroke="#1a7a2e" strokeWidth={symSide * 0.09} />
+                <circle cx={symSide / 2} cy={symSide / 2} r={symDia / 2} fill="#1a7a2e" />
+              </svg>
+              <div style={{ fontFamily: MONOf, fontSize: 10, color: "var(--ink2)", marginTop: 6 }}>Vegetarian<br /><b style={{ color: "var(--ink)" }}>dia {symDia} / side {symSide} mm</b></div>
+            </div>
+            <div style={{ textAlign: "center" }}>
+              <svg width={symSide * PX} height={symSide * PX} viewBox={"0 0 " + symSide + " " + symSide}>
+                <rect x="0.5" y="0.5" width={symSide - 1} height={symSide - 1} fill="none" stroke="#7a3b12" strokeWidth={symSide * 0.09} />
+                <polygon points={(symSide / 2) + "," + (symSide / 2 - symDia / 2) + " " + (symSide / 2 - symDia / 2) + "," + (symSide / 2 + symDia / 2) + " " + (symSide / 2 + symDia / 2) + "," + (symSide / 2 + symDia / 2)} fill="#7a3b12" />
+              </svg>
+              <div style={{ fontFamily: MONOf, fontSize: 10, color: "var(--ink2)", marginTop: 6 }}>Non-vegetarian<br /><b style={{ color: "var(--ink)" }}>dia {symDia} / side {symSide} mm</b></div>
+            </div>
+          </div>
+          <div style={{ fontFamily: MONOf, fontSize: 10, color: "var(--ink2)", marginTop: 10 }}>Square side is exactly twice the inner symbol. Shown to scale.</div>
+        </div>
+      )}
+
+      {market === "EU" && cls === "device" && (
+        <div style={card}>
+          <div style={lbl}>European Union, CE marking (MDR 2017/745 Annex I 23.2)</div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 16, marginTop: 8 }}>
+            <span style={{ fontFamily: DISPf, fontWeight: 600, lineHeight: 0.8, fontSize: 5 * PX, color: "var(--ink)", letterSpacing: 1 }}>CE 0123</span>
+            <div style={{ fontFamily: MONOf, fontSize: 11, color: "var(--ink2)" }}>Minimum height <b style={{ color: "var(--ink)" }}>5 mm</b>, shown to scale. The 4-digit Notified Body number sits immediately next to the mark.</div>
+          </div>
+        </div>
+      )}
+
+      {market === "EU" && cls !== "device" && (
+        <div style={card}>
+          <div style={lbl}>European Union</div>
+          <div style={{ color: "var(--ink2)" }}>No single size table applies here. Text must be legible, and for medicines the name also appears in Braille (Dir 2001/83 Art. 56a).</div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+        <div style={{ height: rulerMm * PX * 0, width: 0 }} />
+        <div style={{ width: rulerMm * PX, height: 6, borderLeft: "1px solid var(--ink2)", borderRight: "1px solid var(--ink2)", borderBottom: "1px solid var(--ink2)" }} />
+        <span style={{ fontFamily: MONOf, fontSize: 10, color: "var(--ink2)" }}>{rulerMm} mm reference (approximate, depends on your display)</span>
+      </div>
+    </div>
+  );
+}
+
+createRoot(document.getElementById("root")).render(<LabelPathInspector />);
+</script>
+</body>
+</html>
